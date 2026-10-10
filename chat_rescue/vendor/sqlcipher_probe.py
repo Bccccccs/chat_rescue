@@ -114,4 +114,3 @@ def load_key(path, db_path):
     if len(set(entries)) != 1:
         raise RuntimeError('missing or ambiguous key for this database')
     return entries[0]
-
