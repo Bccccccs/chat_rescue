@@ -1,0 +1,21 @@
+name: 合成数据恢复验证
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic-recovery:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: 安装 SQLCipher
+        run: brew install sqlcipher
+      - name: 要求加密集成依赖可用
+        run: python -c 'from chat_rescue.vendor.sqlcipher_probe import library; library()'
+      - name: 执行合成恢复与回撤测试
+        run: python -W error::ResourceWarning -m unittest discover -s tests -v

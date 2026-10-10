@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chat-rescue"
+version = "0.1.0"
+description = "Experimental macOS WeChat conversation recovery from an authorized peer copy"
+requires-python = ">=3.14"
+license = "MIT"
+readme = "README.md"
+
+[project.scripts]
+chat-rescue = "chat_rescue.__main__:main"
+
+[tool.setuptools.package-data]
+"chat_rescue.vendor" = ["LICENSE"]
+
+[tool.setuptools.packages.find]
+include = ["chat_rescue*"]
