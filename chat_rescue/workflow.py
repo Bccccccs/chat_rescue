@@ -269,7 +269,8 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
                 continue
             local_ids[row['server_id']] = _insert(c, table, row)
             added_ids.add(row['server_id'])
-        c.execute('DELETE FROM DeleteInfo WHERE chat_name_id=? OR delete_table_name=?', (peer_id, table))
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='DeleteInfo'").fetchone():
+            c.execute('DELETE FROM DeleteInfo WHERE chat_name_id=? OR delete_table_name=?', (peer_id, table))
         c.commit()
     with write_connect(output / RELS[1]) as c:
         for resource in data['resources']:
@@ -278,7 +279,13 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
             if sid not in added_ids:
                 continue
             sender = next(m['sender'] for m in data['messages'] if m['fields']['server_id'] == sid)
-            if c.execute('SELECT 1 FROM MessageResourceInfo WHERE message_svr_id=?', (sid,)).fetchone():
+            existing_chats = c.execute(
+                'SELECT chats.user_name FROM MessageResourceInfo AS resource '
+                'LEFT JOIN ChatName2Id AS chats ON chats.rowid=resource.chat_id '
+                'WHERE resource.message_svr_id=?', (sid,)).fetchall()
+            # Resource caches can share a server ID across conversations. Keep
+            # foreign caches intact, but reject ambiguous or same-chat entries.
+            if any(not row[0] or row[0] == peer for row in existing_chats):
                 raise ValueError('existing resource identity collision')
             info.pop('message_id')
             info.update(chat_id=_mapping(c, 'ChatName2Id', peer, update_time=info['message_create_time']),

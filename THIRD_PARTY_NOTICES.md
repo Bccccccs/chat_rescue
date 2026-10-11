@@ -9,7 +9,7 @@
 - 许可证：MIT
 - 原版权声明：`Copyright (c) 2026 Contributors`
 
-保留随固定副本提供的许可证和版权声明。本项目的封装、中文文档及自有代码按根目录 MIT License 提供；它们不替代上游版权声明。下面保留上游 MIT 许可文本：
+本项目在固定副本上增加数据库完成分组校验及启动工作目录说明，未更换上游基线。保留随固定副本提供的许可证和版权声明。本项目的封装、中文文档及自有代码按根目录 MIT License 提供；它们不替代上游版权声明。下面保留上游 MIT 许可文本：
 
 ```text
 MIT License
@@ -37,4 +37,4 @@ SOFTWARE.
 
 ## 外部运行环境
 
-微信应用、Apple LLDB/Xcode Command Line Tools、Python、Homebrew 和 SQLCipher 由用户自行安装，按各自许可证或使用条款提供；本项目 MIT License 不适用于这些产品。本项目不分发微信应用本体，专用副本由用户在自己的 Mac 上从已安装的应用创建。
+微信应用、Apple LLDB/Xcode Command Line Tools、Homebrew 由用户自行安装；源码运行所需 Python、SQLCipher 由用户安装，桌面包包含其运行时，按各自许可证或使用条款提供；本项目 MIT License 不适用于这些产品。Python 与 SQLCipher 的许可证以打包运行时及各项目上游许可为准。本项目不分发微信应用本体，专用副本由用户在自己的 Mac 上从已安装的应用创建。

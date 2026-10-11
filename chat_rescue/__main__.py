@@ -27,7 +27,14 @@ def app_info(path):
         raise ValueError('请选择微信 .app')
     with (path / 'Contents/Info.plist').open('rb') as f:
         info = plistlib.load(f)
-    if info.get('CFBundleIdentifier') != 'com.tencent.xinWeChat' or info.get('CFBundleShortVersionString') != '4.1.13':
+    identifier = info.get('CFBundleIdentifier')
+    trusted_copy = False
+    if identifier in ('local.chat-rescue.wechat.A', 'local.chat-rescue.wechat.B'):
+        marker = path.with_suffix('.prepare.json')
+        if marker.is_file():
+            prepared = json.loads(marker.read_text())
+            trusted_copy = prepared.get('bundle_identifier') == identifier
+    if (identifier != 'com.tencent.xinWeChat' and not trusted_copy) or info.get('CFBundleShortVersionString') != '4.1.13':
         raise ValueError('首版只接受已实测的微信 4.1.13；其他版本需重新适配验证')
     exe = path / 'Contents/MacOS' / info['CFBundleExecutable']
     if not exe.is_file():
@@ -35,11 +42,13 @@ def app_info(path):
     return path, exe
 
 
-def prepare(app, output):
+def prepare(app, output, signing_id=None, bundle_identifier=None):
     mac_only(); ensure_closed()
     if os.geteuid() == 0:
         raise RuntimeError('请勿使用 sudo/root')
     app, exe = app_info(app)
+    if bundle_identifier and bundle_identifier not in ('local.chat-rescue.wechat.A', 'local.chat-rescue.wechat.B'):
+        raise ValueError('副本应用标识不受支持')
     output = Path(output).resolve()
     marker = output.with_suffix('.prepare.json')
     if output.exists() or marker.exists() or output.is_relative_to(app) or app.is_relative_to(output):
@@ -48,11 +57,24 @@ def prepare(app, output):
     signature = run(['/usr/bin/codesign', '-dvv', str(app)])
     run(['/usr/bin/codesign', '--verify', '--deep', '--strict', str(app)])
     run(['/usr/bin/ditto', str(app), str(output)])
+    if bundle_identifier:
+        info_path = output / 'Contents/Info.plist'
+        info = plistlib.loads(info_path.read_bytes())
+        info['CFBundleIdentifier'] = bundle_identifier
+        info['CFBundleDisplayName'] = '微信 ' + bundle_identifier.rsplit('.', 1)[1]
+        info_path.write_bytes(plistlib.dumps(info))
+    # Derive nested identifiers from their own bundles. Passing --identifier with
+    # --deep overwrites helper identities too and breaks the debug startup path.
     run(['/usr/bin/codesign', '--force', '--deep', '--sign', '-', str(output)])
+    sign_args = ['/usr/bin/codesign', '--force', '--sign', '-']
+    if signing_id:
+        sign_args += ['--identifier', signing_id]
+    run([*sign_args, str(output)])
     run(['/usr/bin/codesign', '--verify', '--deep', '--strict', str(output)])
     if run(['/usr/bin/codesign', '-dvv', str(app)]) != signature:
         raise RuntimeError('原版签名发生变化，请先检查原版')
-    private_json(marker, {'original': str(app), 'signature': signature,
+    private_json(marker, {'original': str(app), 'signature': signature, 'signing_identifier': signing_id, 'bundle_identifier': bundle_identifier,
+                         'signing_revision': 2,
                          'original_executable_sha256': digest(exe),
                          'copy_executable_sha256': digest(output / 'Contents/MacOS' / exe.name)})
     return {'copy': str(output), 'instruction': '为此固定副本授权完全磁盘访问；在原生 Terminal 执行 capture-keys。'}
@@ -72,15 +94,21 @@ def capture(args):
         raise FileExistsError('密钥输出已存在；选择新文件名')
     output.parent.mkdir(parents=True, exist_ok=True)
     root = Path(args.db_root).resolve(strict=True)
-    for rel in ALL:
-        if not (root / rel).is_file():
-            raise ValueError('请先登录原版生成本地数据库：' + rel)
+    database_roots = [Path(p).resolve(strict=True) for p in getattr(args, 'db_roots', None) or [root]]
+    for candidate in database_roots:
+        if not candidate.is_relative_to(root):
+            raise ValueError('账号候选必须位于本次选定的微信目录内')
+        for rel in ALL:
+            if not (candidate / rel).is_file():
+                raise ValueError('请先登录微信并等待本地记录建立：' + rel)
+    groups = output.parent / 'capture-groups.json'
+    private_json(groups, [[str((candidate/rel).relative_to(root)) for rel in ALL] for candidate in database_roots])
     env = dict(os.environ, PYTHONPATH=run(['/usr/bin/lldb', '-P']).strip())
-    print('副本启动后登录对应账号；结束后请正常打开原版。密钥不会输出到终端。', flush=True)
+    print('副本启动后登录本次账号并完成手机确认；验证结束会关闭本次副本。密钥不会输出到终端。', flush=True)
     try:
         result = subprocess.run(['/usr/bin/python3', str(Path(__file__).parent / 'vendor/capture_keys.py'),
                                  '--exe', str(exe), '--db-root', str(root), '--out', str(output),
-                                 '--timeout', str(args.timeout)], env=env)
+                                 '--timeout', str(args.timeout), '--completion-groups', str(groups)], env=env)
     finally:
         # Keep the fixed path for TCC permissions, but prevent LaunchServices
         # from preferring the duplicate bundle when the user opens the original.
@@ -90,10 +118,25 @@ def capture(args):
             raise RuntimeError('原版签名或可执行文件改变，请检查后再启动')
     if result.returncode:
         raise RuntimeError('取钥未完成，请按故障处理文档检查权限和副本登录状态')
-    for rel in ALL:
-        with DB(root / rel, load_key(output, root / rel)) as d:
-            d.query('SELECT count(*) FROM sqlite_master')
+    verified_roots = []
+    for candidate in database_roots:
+        try:
+            for rel in ALL:
+                with DB(candidate / rel, load_key(output, candidate / rel)) as d:
+                    d.query('SELECT count(*) FROM sqlite_master')
+            import re
+            from .cipher import literal
+            owner = re.sub(r'_[0-9a-fA-F]{4}$', '', candidate.parent.name)
+            with DB(candidate/'contact/contact.db', load_key(output, candidate/'contact/contact.db')) as d:
+                rows = d.query('SELECT username,nick_name FROM contact WHERE username=' + literal(owner))
+            if len(rows) == 1:
+                verified_roots.append({'root':str(candidate),'owner':owner,'nickname':rows[0]['nick_name'] or '昵称未设置'})
+        except (RuntimeError, ValueError, KeyError):
+            continue
+    if not verified_roots:
+        raise RuntimeError('尚未完成任何账号的四库及本人身份验证，请检查登录与权限')
     return {'keys': str(output), 'verified_required_databases': len(ALL),
+            'accounts':verified_roots,
             'instruction': '四个必要数据库验证通过；副本已关闭。导出前保持微信退出。'}
 
 
@@ -108,8 +151,12 @@ def contacts(root, query):
 
 
 def roots():
-    base = Path.home() / 'Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files'
-    return {'database_roots': [str(p) for p in sorted(base.glob('*/db_storage'))],
+    identifiers = ('com.tencent.xinWeChat', 'local.chat-rescue.wechat.A', 'local.chat-rescue.wechat.B')
+    found = []
+    for identifier in identifiers:
+        base = Path.home() / 'Library/Containers' / identifier / 'Data/Documents/xwechat_files'
+        found.extend(str(p) for p in sorted(base.glob('*/db_storage')))
+    return {'database_roots': found,
             'instruction': '从刚登录账号核对目录，不能自动根据修改时间选择账号。'}
 
 

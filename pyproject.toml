@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chat-rescue"
-version = "0.1.0"
+version = "0.3.5"
 description = "Experimental macOS WeChat conversation recovery from an authorized peer copy"
 requires-python = ">=3.14"
 license = "MIT"

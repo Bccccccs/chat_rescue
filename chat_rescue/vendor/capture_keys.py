@@ -49,6 +49,7 @@ def main():
     ap.add_argument('--db-root', required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--timeout', type=int, default=150)
+    ap.add_argument('--completion-groups', help='Private JSON groups of required relative database paths')
     args = ap.parse_args()
     if Path(args.out).exists():
         raise RuntimeError("output already exists; select a new private filename")
@@ -61,6 +62,10 @@ def main():
             rows.append((str(p.relative_to(root)), page))
     if not rows:
         raise RuntimeError('no encrypted database pages to validate')
+    groups = json.loads(Path(args.completion_groups).read_text()) if args.completion_groups else []
+    known = {rel for rel, _ in rows}
+    if groups and any(not group or not set(group).issubset(known) for group in groups):
+        raise RuntimeError('required database group missing from selected scope')
     salts = {page[:16] for _,page in rows}
     macsalts = {bytes(x^0x3a for x in s): s for s in salts}
     found = {}
@@ -78,6 +83,8 @@ def main():
     launch.AddSuppressFileAction(0, True, False)
     launch.AddSuppressFileAction(1, False, True)
     launch.AddSuppressFileAction(2, False, True)
+    # WeChat resolves startup resources relative to Contents/MacOS under LLDB.
+    # Match the earlier successful fixed-copy capture, not the GUI launch context.
     launch.SetWorkingDirectory(str(exe.parent))
     err = lldb.SBError()
     process = None
@@ -135,6 +142,7 @@ def main():
                 e=process.Continue()
                 if e.Fail(): raise RuntimeError('could not resume launched process')
             if len(found)==len(rows): break
+            if groups and any(set(group).issubset(found) for group in groups): break
             if time.monotonic()-last_update>15:
                 emit('waiting',verified_databases=len(found),**counts)
                 last_update=time.monotonic()

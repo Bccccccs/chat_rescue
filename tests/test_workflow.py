@@ -32,6 +32,45 @@ class WorkflowTests(unittest.TestCase):
   self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name);self.source=self.root/'source';self.target=self.root/'target';fixture(self.source,True);fixture(self.target,False);self.bundle=self.root/'bundle'
  def tearDown(self):self.tmp.cleanup()
  def save(self):return save_chat(self.source,B,A,self.bundle)
+ def test_restore_without_optional_delete_index(self):
+  self.save()
+  with db(self.target/'message/message_0.db') as c:c.execute('DROP TABLE DeleteInfo')
+  r=prepare_plain_restore(self.bundle,self.target,A,self.root/'result')
+  self.assertEqual(r['added'],2)
+  with db(self.root/'result/message/message_0.db') as c:
+   self.assertEqual(c.execute('PRAGMA integrity_check').fetchone()[0],'ok')
+   self.assertEqual(c.execute('SELECT count(*) FROM '+r['table']).fetchone()[0],2)
+   self.assertIsNone(c.execute("SELECT name FROM sqlite_master WHERE name='DeleteInfo'").fetchone())
+ def test_foreign_chat_resource_same_id_is_preserved(self):
+  self.save()
+  with db(self.target/'message/message_resource.db') as c:
+   c.execute('INSERT INTO ChatName2Id(rowid,user_name,update_time) VALUES(11,?,0)',('wxid_unrelated_demo',))
+   c.execute('INSERT INTO SenderName2Id(rowid,user_name,update_time) VALUES(13,?,0)',(A,))
+   c.execute('INSERT INTO MessageResourceInfo VALUES(8,11,13,25769803825,1700000000,90,101,6,?)',(b'foreign cache',))
+   c.execute("INSERT INTO MessageResourceDetail VALUES(16,8,1,10,1700000000,0,0,'foreign.dat',NULL)")
+   original=c.execute('SELECT * FROM MessageResourceInfo WHERE message_id=8').fetchone()
+   detail=c.execute('SELECT * FROM MessageResourceDetail WHERE resource_id=16').fetchone()
+  r=prepare_plain_restore(self.bundle,self.target,A,self.root/'result')
+  self.assertEqual(r['added'],2)
+  with db(self.root/'result/message/message_resource.db') as c:
+   self.assertEqual(c.execute('SELECT * FROM MessageResourceInfo WHERE message_id=8').fetchone(),original)
+   self.assertEqual(c.execute('SELECT * FROM MessageResourceDetail WHERE resource_id=16').fetchone(),detail)
+   added=c.execute('SELECT r.message_id,ch.user_name,s.user_name FROM MessageResourceInfo r JOIN ChatName2Id ch ON ch.rowid=r.chat_id JOIN SenderName2Id s ON s.rowid=r.sender_id WHERE r.message_id!=8 AND r.message_svr_id=101').fetchall()
+   self.assertEqual(len(added),1);self.assertEqual(added[0][1:],(B,A))
+ def test_existing_target_chat_resource_still_refused(self):
+  self.save()
+  with db(self.target/'message/message_resource.db') as c:
+   c.execute('INSERT INTO ChatName2Id(rowid,user_name,update_time) VALUES(11,?,0)',(B,))
+   c.execute('INSERT INTO SenderName2Id(rowid,user_name,update_time) VALUES(13,?,0)',(A,))
+   c.execute('INSERT INTO MessageResourceInfo VALUES(8,11,13,25769803825,1700000000,90,101,6,?)',(b'conflicting cache',))
+  with self.assertRaisesRegex(ValueError,'resource identity collision'):
+   prepare_plain_restore(self.bundle,self.target,A,self.root/'result')
+ def test_resource_without_chat_identity_still_refused(self):
+  self.save()
+  with db(self.target/'message/message_resource.db') as c:
+   c.execute('INSERT INTO MessageResourceInfo VALUES(8,99,13,25769803825,1700000000,90,101,6,NULL)')
+  with self.assertRaisesRegex(ValueError,'resource identity collision'):
+   prepare_plain_restore(self.bundle,self.target,A,self.root/'result')
  def change(self,sql,args=()):
   with db(self.source/'message/message_0.db') as c:
    t=c.execute("SELECT name FROM sqlite_master WHERE name LIKE 'Msg_%' AND type='table'").fetchone()[0];c.execute(sql.format(table=t),args)

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="580" viewBox="0 0 1400 580" role="img" aria-labelledby="title desc"><title id="title">Chat Rescue 五步桌面向导</title><desc id="desc">准备、登录、读取、预览确认和结果验收。账号为示意，无真实聊天信息。</desc><rect width="1400" height="580" fill="#191b20"/><g font-family="PingFang SC,Microsoft YaHei,sans-serif"><text x="45" y="65" fill="#f5f5f7" font-size="32" font-weight="bold">Chat Rescue · 双方聊天互相补齐</text><text x="45" y="105" fill="#a9afbc" font-size="18">0.3.5 本机实验版 · 界面流程示意</text>
+<rect x="45" y="150" width="245" height="300" rx="22" fill="#222733" stroke="#343d50"/><circle cx="85" cy="195" r="22" fill="#376cf6"/><text x="85" y="202" text-anchor="middle" fill="white" font-size="22">1</text><text x="67" y="255" fill="#ffffff" font-size="24" font-weight="bold">准备软件</text>
+<text x="67" y="310" fill="#bfc7d8" font-size="17">检查运行环境</text>
+<text x="67" y="352" fill="#bfc7d8" font-size="17">准备固定 A / B 副本</text>
+<text x="67" y="394" fill="#bfc7d8" font-size="17">首次完成系统权限授权</text>
+<text x="295" y="305" fill="#376cf6" font-size="24">→</text>
+<rect x="315" y="150" width="245" height="300" rx="22" fill="#222733" stroke="#343d50"/><circle cx="355" cy="195" r="22" fill="#376cf6"/><text x="355" y="202" text-anchor="middle" fill="white" font-size="22">2</text><text x="337" y="255" fill="#ffffff" font-size="24" font-weight="bold">登录两个账号</text>
+<text x="337" y="310" fill="#bfc7d8" font-size="17">分别登录账号 A / B</text>
+<text x="337" y="352" fill="#bfc7d8" font-size="17">完成扫码与手机确认</text>
+<text x="337" y="394" fill="#bfc7d8" font-size="17">确认电脑上可见源聊天</text>
+<text x="565" y="305" fill="#376cf6" font-size="24">→</text>
+<rect x="585" y="150" width="245" height="300" rx="22" fill="#222733" stroke="#343d50"/><circle cx="625" cy="195" r="22" fill="#376cf6"/><text x="625" y="202" text-anchor="middle" fill="white" font-size="22">3</text><text x="607" y="255" fill="#ffffff" font-size="24" font-weight="bold">读取双方聊天</text>
+<text x="607" y="310" fill="#bfc7d8" font-size="17">正常退出微信副本</text>
+<text x="607" y="352" fill="#bfc7d8" font-size="17">依次取钥并验证四库</text>
+<text x="607" y="394" fill="#bfc7d8" font-size="17">识别昵称 · 备份 · 预览</text>
+<text x="835" y="305" fill="#376cf6" font-size="24">→</text>
+<rect x="855" y="150" width="245" height="300" rx="22" fill="#222733" stroke="#343d50"/><circle cx="895" cy="195" r="22" fill="#376cf6"/><text x="895" y="202" text-anchor="middle" fill="white" font-size="22">4</text><text x="877" y="255" fill="#ffffff" font-size="24" font-weight="bold">确认补齐预览</text>
+<text x="877" y="310" fill="#bfc7d8" font-size="17">账号 A  ⇄  账号 B</text>
+<text x="877" y="352" fill="#bfc7d8" font-size="17">核对各侧新增与重复数量</text>
+<text x="877" y="394" fill="#bfc7d8" font-size="17">确认后才写入聊天库</text>
+<text x="1105" y="305" fill="#376cf6" font-size="24">→</text>
+<rect x="1125" y="150" width="245" height="300" rx="22" fill="#222733" stroke="#343d50"/><circle cx="1165" cy="195" r="22" fill="#376cf6"/><text x="1165" y="202" text-anchor="middle" fill="white" font-size="22">5</text><text x="1147" y="255" fill="#ffffff" font-size="24" font-weight="bold">检查恢复结果</text>
+<text x="1147" y="310" fill="#bfc7d8" font-size="17">打开两个微信检查</text>
+<text x="1147" y="352" fill="#bfc7d8" font-size="17">核对内容、时间与方向</text>
+<text x="1147" y="394" fill="#bfc7d8" font-size="17">手机迁移需单独验收</text>
+<text x="45" y="510" fill="#13b79e" font-size="20">预览前不写入 · 保留原件与回执 · 冲突停止 · 库变化拒绝应用或撤回</text><text x="45" y="550" fill="#a9afbc" font-size="17">仅支持授权单聊的部分消息类型；附件本体不恢复；客户端显示与手机迁移分别验收。</text></g></svg>

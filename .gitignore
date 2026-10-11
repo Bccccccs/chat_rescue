@@ -17,3 +17,10 @@ chat-rescue-data/
 *.jpeg
 *.log
 *.prepare.json
+
+.build-venv/
+build/
+dist/
+*.spec
+
+!desktop/assets/chat-rescue-icon.png
