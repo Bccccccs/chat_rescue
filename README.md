@@ -16,6 +16,8 @@
 
 [下载与发布说明](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.3.5) · [更新记录](CHANGELOG.md)
 
+**第一次使用？请看 [零基础手把手教程](docs/beginner-guide.md)**：从下载安装、四项权限授权，到分别登录、确认旧聊天、核对补齐预览和检查结果，按实际按钮一步一步操作。
+
 ### 五步图示
 
 下图依据当前界面与提供的页面截图重绘，使用通用账号标签；是操作示意，不是恢复成功的验收凭证。
@@ -114,6 +116,7 @@ python3.14 -m chat_rescue doctor
 
 ## 文档
 
+- [零基础手把手教程：桌面版从安装到结果检查](docs/beginner-guide.md)
 - [双账号恢复 SOP：可复制的命令与操作顺序](docs/recovery-sop.md)
 - [命令说明与输出约定](docs/cli.md)
 - [隐私、密钥与分享规则](docs/privacy.md)
