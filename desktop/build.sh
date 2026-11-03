@@ -2,6 +2,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 PYTHON="${CHAT_RESCUE_PYTHON:-python3.14}"
+VERSION="$("$PYTHON" -c 'from chat_rescue import __version__; print(__version__)')"
 if [[ ! -x .build-venv/bin/python ]]; then
   "$PYTHON" -m venv .build-venv
   .build-venv/bin/pip install 'pyinstaller>=6.16,<7'
@@ -21,10 +22,11 @@ xcrun swiftc -parse-as-library -O -target arm64-apple-macosx14.0 desktop/ChatRes
 /usr/bin/ditto build/backend-dist/chat-rescue-backend "$APP/Contents/Resources/backend"
 .build-venv/bin/python - <<'PY'
 import plistlib
+from chat_rescue import __version__
 from pathlib import Path
 info={'CFBundleExecutable':'ChatRescue','CFBundleIdentifier':'local.chat-rescue.desktop',
       'CFBundleName':'Chat Rescue','CFBundleDisplayName':'Chat Rescue',
-      'CFBundleShortVersionString':'0.3.5','CFBundleVersion':'9','CFBundlePackageType':'APPL',
+      'CFBundleShortVersionString':__version__,'CFBundleVersion':'10','CFBundlePackageType':'APPL',
       'LSMinimumSystemVersion':'14.0','NSHighResolutionCapable':True,
       'NSHumanReadableCopyright':'Chat Rescue contributors · MIT',
       'NSPrincipalClass':'NSApplication','CFBundleIconFile':'AppIcon.icns'}
@@ -34,5 +36,5 @@ PY
 /usr/bin/ditto THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
 /usr/bin/codesign --force --deep --sign - "$APP"
 /usr/bin/codesign --verify --deep --strict "$APP"
-/usr/bin/ditto -c -k --keepParent "$APP" dist/Chat-Rescue-0.3.5-macOS-arm64.zip
-print "桌面软件已生成：$PWD/$APP"
+/usr/bin/ditto -c -k --keepParent "$APP" "dist/Chat-Rescue-$VERSION-macOS-arm64.zip"
+print "桌面软件已生成：$PWD/$APP（$VERSION）"

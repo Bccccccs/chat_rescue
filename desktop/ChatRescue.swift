@@ -398,7 +398,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Button { guide = true } label: { Label("一步一步使用指南", systemImage: "questionmark.circle") }.buttonStyle(.plain)
                 Button { advanced = true } label: { Label("高级设置", systemImage: "slider.horizontal.3") }.buttonStyle(.plain)
-                Text("0.3.5 · 本机实验版").font(.caption).foregroundStyle(.tertiary)
+                Text("\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版") · 本机实验版").font(.caption).foregroundStyle(.tertiary)
             }.font(.system(size: 13))
         }.padding(18).background(Palette.surface.opacity(0.48))
     }

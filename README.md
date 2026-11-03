@@ -18,7 +18,7 @@
 
 [下载与发布说明](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.3.5) · [更新记录](CHANGELOG.md)
 
-**第一次使用？请看 [零基础手把手教程](docs/beginner-guide.md)**：从下载安装、四项权限授权，到分别登录、确认旧聊天、核对补齐预览和检查结果，按实际按钮一步一步操作。
+**第一次使用 Mac 版？请看 [Mac 零基础手把手教程](docs/beginner-guide.md)**：从下载安装、四项权限授权，到分别登录、确认旧聊天、核对补齐预览和检查结果，按实际按钮一步一步操作。Windows 使用上方安装包入口和 Windows 五步说明。
 
 ### 五步图示
 
@@ -56,7 +56,7 @@
 ./desktop/build.sh
 ```
 
-产物：`dist/Chat Rescue.app` 与 `dist/Chat-Rescue-0.3.5-macOS-arm64.zip`。构建需 Python 3.14、SQLCipher 和 Xcode Command Line Tools。首次使用按准备页完成权限授权；不要使用 sudo 或关闭 SIP。
+产物：`dist/Chat Rescue.app` 与 `dist/Chat-Rescue-<源码版本>-macOS-arm64.zip`。构建需 Python 3.14、SQLCipher 和 Xcode Command Line Tools。本次未构建新的 Mac 发布包；已发布下载仍为 0.3.5。首次使用按准备页完成权限授权；不要使用 sudo 或关闭 SIP。
 
 ## 让 agent 帮你运行
 
@@ -117,6 +117,9 @@ python3.14 -m chat_rescue doctor
 **照片、视频和文件附件也能恢复吗？** 首版不恢复附件内容；支持的文件消息条目不代表附件完整可打开。完整限制见 [支持边界](docs/evidence-and-support.md)。
 
 ## 文档
+
+- [Windows 安装包与跨电脑部署](docs/windows-deployment.md)
+- [Windows 五步桌面向导](docs/windows-desktop.md)
 
 - [零基础手把手教程：桌面版从安装到结果检查](docs/beginner-guide.md)
 - [双账号恢复 SOP：可复制的命令与操作顺序](docs/recovery-sop.md)
