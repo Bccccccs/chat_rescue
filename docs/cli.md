@@ -61,6 +61,8 @@ python3.14 -m chat_rescue contacts --plain-root "$WORK/source-plain" \
 
 首版只接受单个 `message_0.db`，有其他编号分片时拒绝。仅支持类型 1、42 与 49 子类型 6；会话存在其他类型时整段拒绝，不会自动删掉或跳过它们。
 
+Windows 4.2.0.12 当前仅核验文本方向。匹配的 Windows 取钥回执使 `export-report.json` 和 bundle 携带 `direction_profile`，恢复分别按源、目标配置转换；候选明文的 `direction-profile.json` 保留目标配置，供再次验证使用。缺失配置的旧 bundle 按 `legacy-v1` 处理，未知配置拒绝。Windows 文本的一秒本地时间差去重条件和 `timestamp_variants_preserved` 见 [Windows 说明](windows.md)；不会覆盖已有消息的本地时间。
+
 ## 预览与应用
 
 ```sh
@@ -78,3 +80,18 @@ python3.14 -m chat_rescue apply --plan "$WORK/restore-plan"
 ## 输出与隐私
 
 以每次命令给出的报告路径和状态为准。不要把密钥、明文数据库、bundle、候选或原件的完整内容贴到公开问题单。若要反馈错误，提供经过脱敏的命令名、环境版本、错误类别与最小复现步骤；不要提供真实路径、账号标识或聊天正文。
+
+## Windows 与新增离线命令
+
+Windows 运行方式为 `py -3.14 -m chat_rescue`，完整前置条件、PowerShell 示例和支持边界见 [Windows 说明](windows.md)。原有 Mac 参数保留；Windows 不能执行 Mac 的 prepare-key-app/capture-keys。
+
+- `init-work --output <新目录>`：创建私有工作目录；Windows 设置并验证 ACL。
+- `roots [--search-path <xwechat_files或db_storage>]`：允许重复指定自定义数据位置；Windows 默认搜索系统 Documents。
+- `verify-keys --db-root <目录> --keys <私有JSON>`：微信退出后，只读核对四库密钥与完整性，不输出密钥；不替代身份与结构验证。
+- `plan-sync --a-root <目录> --a-keys <JSON> --a-owner <username> --b-root <目录> --b-keys <JSON> --b-owner <username> --output <新目录>`：生成双方本机补齐预览，不改原库。
+- `apply-sync --plan <目录>`：用户确认具体双向计划后协调应用，核对 sync-result.json 与各侧回执。
+- `undo-sync --plan <目录>`：仅撤回完整应用且双方库没有后续变化的双向任务；不是单向 rollback 子命令。
+
+Windows `doctor.ready` 仅表示离线运行依赖就绪；`key_capture_available=false`，不要求 Apple LLDB。
+
+Windows 4.2.0.x x64 新增实验命令：`inspect-windows-app --exe <原版程序>` 检查完整版本、PE 架构、腾讯签名与哈希；`capture-windows-keys --pid <明确PID> --exe <原版程序> --db-root <本次账号目录> --owner <本人确认username> --output <私有新JSON> [--timeout 120]` 只读扫描当前用户指定进程。此命令执行时需要原版微信已由本人登录运行；不使用 Mac 的副本命令。所选四库 HMAC 及完整性全部通过才保存，随后由本人正常退出微信，再 verify-keys / export-db。`experimental_windows_capture_available` 表示命令可尝试，真实取钥与客户端兼容性仍未验收，详见 Windows 说明。

@@ -14,7 +14,7 @@ class ApplyTests(unittest.TestCase):
   private_json(self.plan/'plan.json',{'version':1,'target_root':str(self.live),'originals':self.originals,'candidates':{r:digest(self.plan/'candidates'/r) for r in RELS},'report':{'added':2},'target_owner':'synthetic'})
  def tearDown(self):self.tmp.cleanup()
  def run_apply(self):
-  with patch('chat_rescue.operations.ensure_closed'),patch('chat_rescue.operations.mac_only'):return apply_plan(self.plan)
+  with patch('chat_rescue.operations.ensure_closed'),patch('chat_rescue.operations.supported_host'):return apply_plan(self.plan)
  def test_apply_keeps_originals_and_rejects_repeat(self):
   self.run_apply()
   for rel in RELS:self.assertEqual((self.live/rel).read_bytes(),b'new');self.assertEqual((self.plan/'originals'/rel).read_bytes(),b'old');self.assertFalse(Path(str(self.live/rel)+'-wal').exists())

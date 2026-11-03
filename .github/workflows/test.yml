@@ -19,3 +19,51 @@ jobs:
         run: python -c 'from chat_rescue.vendor.sqlcipher_probe import library; library()'
       - name: 执行合成恢复与回撤测试
         run: python -W error::ResourceWarning -m unittest discover -s tests -v
+  windows-offline:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: 准备固定合成测试 SQLCipher DLL
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'sqlcipher-test.zip'
+          $destination = Join-Path $env:RUNNER_TEMP 'sqlcipher-test'
+          Invoke-WebRequest 'https://api.nuget.org/v3-flatcontainer/sqlitepclraw.lib.e_sqlcipher/2.1.11/sqlitepclraw.lib.e_sqlcipher.2.1.11.nupkg' -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne '461EF5DD142784B44B22662F853DD5DE7A2D28E9C98E0165F26733D81A355696') { throw '测试依赖哈希不匹配' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          "SQLCIPHER_LIBRARY=$destination\runtimes\win-x64\native\e_sqlcipher.dll" >> $env:GITHUB_ENV
+      - name: 要求加密集成依赖可用
+        run: python -c "from chat_rescue.vendor.sqlcipher_probe import library; library()"
+      - name: 执行 Windows 合成恢复与回撤测试
+        run: python -W error::ResourceWarning -m unittest discover -s tests -v
+      - name: 编译 Windows 五步桌面向导
+        shell: pwsh
+        run: .\desktop\windows\build.ps1 -Python (Get-Command python).Source -SqlCipher $env:SQLCIPHER_LIBRARY
+      - name: 准备固定安装器编译工具
+        shell: pwsh
+        run: |
+          $bootstrap = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.4.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe' -OutFile $bootstrap
+          if ((Get-FileHash -LiteralPath $bootstrap -Algorithm SHA256).Hash -ne 'A549929319F9120716677C685535CA4671E4B937B5FDC87E2585F32D8EB30E8C') { throw '安装器编译工具哈希不匹配' }
+          $signature = Get-AuthenticodeSignature -LiteralPath $bootstrap
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Pyrsys') { throw '安装器编译工具签名不匹配' }
+          $directory = Join-Path $env:RUNNER_TEMP 'InnoSetup'
+          $process = Start-Process $bootstrap -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/CURRENTUSER',('/DIR="'+$directory+'"'),'/NOICONS') -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw '安装器编译工具准备失败' }
+          "CHAT_RESCUE_ISCC=$directory\ISCC.exe" >> $env:GITHUB_ENV
+      - name: 构建带运行时的 Windows 安装包
+        shell: pwsh
+        run: python desktop/windows/package.py --iscc $env:CHAT_RESCUE_ISCC --output dist/windows-release
+      - name: 保存 Windows 安装包与校验文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChatRescue-Windows-x64
+          path: |
+            dist/windows-release/Chat-Rescue-*-Setup.exe
+            dist/windows-release/Chat-Rescue-*-Portable.zip
+            dist/windows-release/SHA256SUMS.txt

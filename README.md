@@ -1,4 +1,6 @@
-# chat_rescue：微信聊天记录误删恢复工具（macOS）
+# chat_rescue：微信聊天记录误删恢复工具（Mac / Windows 离线实验支持）
+
+**Windows 0.3.6 实验版：** [下载安装包 / 便携包](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.3.6)，内置 Python 和 SQLCipher，按 **先 A → 核验并退出 → 再 B** 操作。首次部署、依赖配置与多电脑使用见 [安装部署说明](docs/windows-deployment.md)，界面步骤见 [五步向导](docs/windows-desktop.md)。4.2.0.12 已验证两个账号的取钥、四库导出和文本方向；三条合成文本的副本恢复、源账号本地写入验证通过，目标账号仅生成预览。完全空白库初始化、真实双账号 GUI 应用、微信显示及手机迁移尚未验收；名片/文件方向尚未核验。下文下载与 Mac 取钥教程适用于已发布的 Mac 版。
 
 **这个工具的作用，是帮助你恢复与重要的人的微信聊天记录。**
 
@@ -10,13 +12,13 @@
 
 **English:** Open-source WeChat chat history recovery for macOS. Restore supported one-to-one messages from the other participant's retained copy, with perspective conversion, backups, preview, and agent-assisted steps. Experimental; both participants must consent. Attachment content and automatic phone synchronization are not supported.
 
-## 最新版：0.3.5 · 本机实验版
+## 已发布 Mac 版：0.3.5 · 本机实验版
 
 桌面版把双方聊天互相补齐收进五步向导：**准备软件 → 依次登录 A、B → 读取双方聊天 → 确认补齐预览 → 检查恢复结果**。原有 CLI 保留，支持在不同 Mac 之间通过授权单聊 bundle 完成 B → A 恢复。
 
 [下载与发布说明](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.3.5) · [更新记录](CHANGELOG.md)
 
-**第一次使用？请看 [零基础手把手教程](docs/beginner-guide.md)**：从下载安装、四项权限授权，到分别登录、确认旧聊天、核对补齐预览和检查结果，按实际按钮一步一步操作。
+**第一次使用 Mac 版？请看 [Mac 零基础手把手教程](docs/beginner-guide.md)**：从下载安装、四项权限授权，到分别登录、确认旧聊天、核对补齐预览和检查结果，按实际按钮一步一步操作。Windows 使用上方安装包入口和 Windows 五步说明。
 
 当前源码已改为顺序登录：**打开 A → 登录并确认 A → 打开 B → 登录并检查 B 的旧聊天 → 读取并预览**。已发布的 0.3.5 下载包仍是旧流程；使用新流程请从当前源码构建。
 
@@ -56,7 +58,7 @@
 ./desktop/build.sh
 ```
 
-产物：`dist/Chat Rescue.app` 与 `dist/Chat-Rescue-0.3.5-macOS-arm64.zip`。构建需 Python 3.14、SQLCipher 和 Xcode Command Line Tools。首次使用按准备页完成权限授权；不要使用 sudo 或关闭 SIP。
+产物：`dist/Chat Rescue.app` 与 `dist/Chat-Rescue-<源码版本>-macOS-arm64.zip`。构建需 Python 3.14、SQLCipher 和 Xcode Command Line Tools。本次未构建新的 Mac 发布包；已发布下载仍为 0.3.5。首次使用按准备页完成权限授权；不要使用 sudo 或关闭 SIP。
 
 ## 让 agent 帮你运行
 
@@ -117,6 +119,9 @@ python3.14 -m chat_rescue doctor
 **照片、视频和文件附件也能恢复吗？** 首版不恢复附件内容；支持的文件消息条目不代表附件完整可打开。完整限制见 [支持边界](docs/evidence-and-support.md)。
 
 ## 文档
+
+- [Windows 安装包与跨电脑部署](docs/windows-deployment.md)
+- [Windows 五步桌面向导](docs/windows-desktop.md)
 
 - [零基础手把手教程：桌面版从安装到结果检查](docs/beginner-guide.md)
 - [双账号恢复 SOP：可复制的命令与操作顺序](docs/recovery-sop.md)

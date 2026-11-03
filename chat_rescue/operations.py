@@ -1,26 +1,19 @@
 """Offline snapshots, plan generation and coordinated reversible replacement."""
-import fcntl
 import json
 import os
 import platform
 from pathlib import Path
 import shutil
-import subprocess
-from .workflow import RELS, digest, private_json, prepare_plain_restore, _single_shard
+from .workflow import RELS, digest, private_json, prepare_plain_restore, _single_shard, LEGACY_PROFILE, WINDOWS_TEXT_PROFILE
 from .cipher import export_database, encrypt_database
+from .runtime import supported_host, ensure_closed, exclusive_lock, make_private
 
 ALL = (*RELS, 'contact/contact.db')
 
 
 def mac_only():
     if platform.system() != 'Darwin' or platform.machine() != 'arm64':
-        raise RuntimeError('首版仅支持 macOS Apple Silicon')
-
-
-def ensure_closed():
-    rows = subprocess.run(['/bin/ps', '-axo', 'comm='], check=True, capture_output=True, text=True).stdout.splitlines()
-    if any(Path(r.strip()).name in ('WeChat', 'Weixin', '微信') for r in rows):
-        raise RuntimeError('请用 ⌘Q 正常退出原版及副本微信后重试')
+        raise RuntimeError('此取钥流程仅支持 macOS Apple Silicon；Windows 请使用已有授权密钥及 verify-keys')
 
 
 def check_owner(root, owner):
@@ -39,6 +32,7 @@ def fresh(path):
     os.umask(0o077)
     p = Path(path).resolve()
     p.mkdir(parents=True, exist_ok=False, mode=0o700)
+    make_private(p)
     return p
 
 
@@ -63,11 +57,12 @@ def _copy_snapshot(root, output):
 
 
 def export_root(root, keys, output):
-    mac_only(); ensure_closed()
+    supported_host(); ensure_closed()
     root = Path(root).resolve(strict=True)
     output = Path(output).resolve()
     if output.is_relative_to(root) or root.is_relative_to(output):
         raise ValueError('导出目录必须位于微信数据目录之外')
+    profile = capture_direction_profile(root, keys)
     output = fresh(output)
     snapshot = output / '_encrypted_snapshot'
     before = _copy_snapshot(root, snapshot)
@@ -83,14 +78,29 @@ def export_root(root, keys, output):
         copied_keys.unlink(missing_ok=True)
     if state(root) != before:
         raise ValueError('导出期间原库改变，当前导出不可用于恢复')
-    report = {'version': 1, 'account_directory': root.parent.name, 'originals': before,
+    report = {'version': 1, 'account_directory': root.parent.name, 'originals': before, 'direction_profile': profile,
               'exported': {rel: digest(output / rel) for rel in ALL}}
     private_json(output / 'export-report.json', report)
     return {'report': str(output / 'export-report.json'), 'database_count': len(ALL)}
 
 
+def capture_direction_profile(root, keys):
+    """Use a matching local capture receipt, never infer database layout from host OS."""
+    receipt = Path(keys).with_suffix('.capture.json')
+    if not receipt.exists():
+        return LEGACY_PROFILE
+    value = json.loads(receipt.read_text(encoding='utf-8'))
+    if (value.get('state') != 'verified' or value.get('verified_required_databases') != 4
+            or Path(value.get('database_root', '')).resolve() != Path(root).resolve()):
+        raise ValueError('取钥回执与导出账号目录不匹配')
+    check_owner(root, value.get('owner') or 'invalid-owner')
+    if value.get('file_version') != '4.2.0.12':
+        raise ValueError('此 Windows 完整版本尚未验证消息方向，不能生成恢复候选')
+    return WINDOWS_TEXT_PROFILE
+
+
 def make_plan(source, root, keys, owner, output):
-    mac_only(); ensure_closed()
+    supported_host(); ensure_closed()
     root = Path(root).resolve(strict=True)
     check_owner(root, owner)
     output = fresh(output)
@@ -99,7 +109,7 @@ def make_plan(source, root, keys, owner, output):
         raise ValueError('计划目录必须位于微信数据目录之外')
     exported = output / 'target-plain'
     export_root(root, keys, exported)
-    report = json.loads((exported / 'export-report.json').read_text())
+    report = json.loads((exported / 'export-report.json').read_text(encoding='utf-8'))
     result = prepare_plain_restore(source, exported, owner, output / 'recovered-plain')
     for rel in RELS:
         encrypt_database(output / 'recovered-plain' / rel, output / 'candidates' / rel, root / rel, keys)
@@ -115,11 +125,10 @@ def make_plan(source, root, keys, owner, output):
 
 
 def apply_plan(directory):
-    mac_only(); ensure_closed()
+    supported_host(); ensure_closed()
     directory = Path(directory).resolve(strict=True)
-    with (directory / '.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        plan = json.loads((directory / 'plan.json').read_text())
+    with exclusive_lock(directory / '.lock'):
+        plan = json.loads((directory / 'plan.json').read_text(encoding='utf-8'))
         if plan.get('version') != 1 or set(plan['candidates']) != set(RELS):
             raise ValueError('计划格式不受支持')
         if (directory / 'apply-started.json').exists():

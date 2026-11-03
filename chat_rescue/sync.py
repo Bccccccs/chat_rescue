@@ -1,5 +1,5 @@
 """Two-account union, based on immutable pre-application snapshots."""
-import fcntl
+from .runtime import exclusive_lock, supported_host
 import json
 import os
 import shutil
@@ -19,7 +19,7 @@ def conversation_count(plain, peer):
 
 
 def make_sync_plan(a, b, output):
-    ops.mac_only(); ops.ensure_closed()
+    supported_host(); ops.ensure_closed()
     if a['owner'] == b['owner'] or Path(a['root']).resolve() == Path(b['root']).resolve():
         raise ValueError('请选择两个不同账号与独立的账号目录')
     accounts = {'A': dict(a), 'B': dict(b)}
@@ -34,7 +34,7 @@ def make_sync_plan(a, b, output):
     for slot, account in accounts.items():
         plain = output/(slot+'-plain')
         ops.export_root(account['root'], account['keys'], plain)
-        reports[slot] = json.loads((plain/'export-report.json').read_text())
+        reports[slot] = json.loads((plain/'export-report.json').read_text(encoding='utf-8'))
         with connect(plain/'contact/contact.db') as contact:
             own = contact.execute('SELECT * FROM contact WHERE username=?', (account['owner'],)).fetchone()
             nicknames[slot] = dict(own).get('nick_name') if own else None
@@ -61,9 +61,8 @@ def make_sync_plan(a, b, output):
                 raise ValueError(f'{target_name} 的其他会话存在消息编号冲突。删除待恢复会话不能解决，请保留记录并检查错误详情。原因：{error}') from None
             raise ValueError(
                 f'{target_name} 的待恢复会话存在消息或资源冲突，本次未写入。'
-                f'可先备份并确认 {peer_name} 保留完整记录，再在 {target_name} 的电脑微信中'
-                f'手动删除与 {peer_name} 的这段聊天，正常退出微信后重新读取。'
-                f'删除会丢失该会话仅在本地存在的记录；不确定时请保留记录。原因：{error}') from None
+                f'请保留双方记录和原件，核对 {peer_name} 的源记录与冲突报告。'
+                f'不要为恢复删除聊天或修改消息编号。原因：{error}') from None
         # A fully deduplicated direction needs no writes or session modification.
         if not result['added']:
             directions[slot] = {**result, 'state': 'unchanged', 'plan': None}
@@ -87,13 +86,12 @@ def make_sync_plan(a, b, output):
 
 
 def apply_sync_plan(output):
-    ops.mac_only(); ops.ensure_closed()
+    supported_host(); ops.ensure_closed()
     output = Path(output).resolve(strict=True)
-    with (output/'.sync-lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with exclusive_lock(output/'.sync-lock'):
         if (output/'sync-started.json').exists():
             raise ValueError('此计划已尝试应用，请查看回执；不要重复执行')
-        manifest = json.loads((output/'sync-plan.json').read_text())
+        manifest = json.loads((output/'sync-plan.json').read_text(encoding='utf-8'))
         if manifest.get('version') != 1 or set(manifest['accounts']) != {'A','B'}:
             raise ValueError('双向计划结构不受支持')
         a, b = manifest['accounts']['A'], manifest['accounts']['B']
@@ -110,7 +108,7 @@ def apply_sync_plan(output):
                 directory = (output/(slot+'-plan')).resolve()
                 if directory != Path(direction['plan']).resolve():
                     raise ValueError('双向计划路径无效')
-                plan = json.loads((directory/'plan.json').read_text())
+                plan = json.loads((directory/'plan.json').read_text(encoding='utf-8'))
                 if plan['target_root'] != account['root'] or plan['target_owner'] != account['owner'] or plan['originals'] != manifest['originals'][slot]:
                     raise ValueError('单向计划与双向身份或快照不一致')
                 if set(plan['candidates']) != set(RELS) or (directory/'apply-started.json').exists():
@@ -137,14 +135,13 @@ def apply_sync_plan(output):
 
 def undo_sync_plan(output):
     """Undo only an unchanged, fully applied plan; preserve pre-undo files."""
-    ops.mac_only(); ops.ensure_closed()
+    supported_host(); ops.ensure_closed()
     output=Path(output).resolve(strict=True)
-    with (output/'.sync-lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with exclusive_lock(output/'.sync-lock'):
         if (output/'undo-started.json').exists():
             raise ValueError('撤回已尝试执行，请查看本机回执')
-        manifest=json.loads((output/'sync-plan.json').read_text())
-        result=json.loads((output/'sync-result.json').read_text())
+        manifest=json.loads((output/'sync-plan.json').read_text(encoding='utf-8'))
+        result=json.loads((output/'sync-result.json').read_text(encoding='utf-8'))
         if result['state'] != 'applied':
             raise ValueError('仅可自动撤回已全部应用的双向计划；部分完成请保留回执处理')
         for slot, account in manifest['accounts'].items():
