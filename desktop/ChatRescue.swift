@@ -14,7 +14,7 @@ struct Conversation: Identifiable {
     let unsupported: Int
 }
 struct Settings: Codable, Equatable {
-    var original = "/Applications/微信.app"
+    var original = ["/Applications/微信.app", "/Applications/WeChat.app"].first { FileManager.default.fileExists(atPath: $0) } ?? "/Applications/微信.app"
     var a = Account()
     var b = Account()
     var launchOnOpen = true

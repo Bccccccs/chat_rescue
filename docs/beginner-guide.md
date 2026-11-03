@@ -1,8 +1,8 @@
 # Chat Rescue 零基础使用教程
 
-本篇适用于 **Mac 桌面版**。Windows 0.3.6 请使用[安装与跨电脑部署说明](windows-deployment.md)和[Windows 五步向导](windows-desktop.md)，其登录顺序为先 A 核验并退出，再 B。
+本篇适用于 **Mac 0.3.7 桌面版**。Windows 0.3.6 请使用[安装与跨电脑部署说明](windows-deployment.md)和[Windows 五步向导](windows-desktop.md)，其登录顺序为先 A 核验并退出，再 B。
 
-这篇教程对应当前源码构建的 **Chat Rescue 桌面版（顺序登录流程）**，把两个人仍然保留的微信单聊记录互相补齐。你不需要写代码，也不需要自己寻找数据库或密钥文件。主要操作是：安装软件、授权、登录、核对预览、检查结果。
+这篇教程对应 **Chat Rescue 0.3.7 桌面版（顺序登录流程）**，把两个人仍然保留的微信单聊记录互相补齐。你不需要写代码，也不需要自己寻找数据库或密钥文件。主要操作是：安装软件、授权、登录、核对预览、检查结果。
 
 例如：你误删了和朋友的聊天，朋友还保留着。双方同意后，可以尝试用朋友保留的记录补回你的聊天，并转换成你自己的收发视角。
 
@@ -50,11 +50,11 @@
 
 ## 一、下载并打开软件
 
-已发布的 0.3.5 包仍是旧的登录界面；本文的顺序登录流程需使用当前源码构建的应用。
+新电脑安装也可参阅 [Mac 安装与跨电脑使用](macos-deployment.md)。
 
-1. 打开[0.3.5 下载页面](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.3.5)。
+1. 打开[0.3.7 下载页面](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.3.7)。
 2. 找到页面下方的 **Assets**，如果列表收起来了，点击展开。
-3. 下载 `Chat-Rescue-0.3.5-macOS-arm64.zip`。不要选 `Source code`，那是源码包。
+3. 下载 `Chat-Rescue-0.3.7-macOS-arm64.zip`。不要选 `Source code`，那是源码包。
 4. 打开 Mac 的“访达”（底部程序栏里的蓝白笑脸图标），进入“下载”。
 5. 双击下载的 ZIP 压缩包，解压后找到 `Chat Rescue.app`。
 6. 把它拖到访达左侧的“应用程序”，以后从这里打开。

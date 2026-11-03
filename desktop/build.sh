@@ -14,27 +14,29 @@ CIPHER="${SQLCIPHER_LIBRARY:-/opt/homebrew/opt/sqlcipher/lib/libsqlcipher.dylib}
   --specpath build --add-binary "$CIPHER:." \
   --add-data "$PWD/chat_rescue/vendor/capture_keys.py:chat_rescue/vendor" desktop/backend_entry.py
 ./desktop/make-icon.sh
-APP='dist/Chat Rescue.app'
+DIST="${CHAT_RESCUE_DIST:-dist}"
+APP="$DIST/Chat Rescue.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 /usr/bin/ditto build/ChatRescue.icns "$APP/Contents/Resources/AppIcon.icns"
 xcrun swiftc -parse-as-library -O -target arm64-apple-macosx14.0 desktop/LoginFlow.swift desktop/ChatRescue.swift -o "$APP/Contents/MacOS/ChatRescue"
 # ditto updates the build-owned backend directory; never includes account data.
 /usr/bin/ditto build/backend-dist/chat-rescue-backend "$APP/Contents/Resources/backend"
-.build-venv/bin/python - <<'PY'
+.build-venv/bin/python - "$APP" <<'PY'
 import plistlib
+import sys
 from chat_rescue import __version__
 from pathlib import Path
 info={'CFBundleExecutable':'ChatRescue','CFBundleIdentifier':'local.chat-rescue.desktop',
       'CFBundleName':'Chat Rescue','CFBundleDisplayName':'Chat Rescue',
-      'CFBundleShortVersionString':__version__,'CFBundleVersion':'10','CFBundlePackageType':'APPL',
+      'CFBundleShortVersionString':__version__,'CFBundleVersion':'11','CFBundlePackageType':'APPL',
       'LSMinimumSystemVersion':'14.0','NSHighResolutionCapable':True,
       'NSHumanReadableCopyright':'Chat Rescue contributors · MIT',
       'NSPrincipalClass':'NSApplication','CFBundleIconFile':'AppIcon.icns'}
-Path('dist/Chat Rescue.app/Contents/Info.plist').write_bytes(plistlib.dumps(info))
+(Path(sys.argv[1])/'Contents/Info.plist').write_bytes(plistlib.dumps(info))
 PY
 /usr/bin/ditto LICENSE "$APP/Contents/Resources/LICENSE"
 /usr/bin/ditto THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
 /usr/bin/codesign --force --deep --sign - "$APP"
 /usr/bin/codesign --verify --deep --strict "$APP"
-/usr/bin/ditto -c -k --keepParent "$APP" "dist/Chat-Rescue-$VERSION-macOS-arm64.zip"
+/usr/bin/ditto -c -k --keepParent "$APP" "$DIST/Chat-Rescue-$VERSION-macOS-arm64.zip"
 print "桌面软件已生成：$PWD/$APP（$VERSION）"
