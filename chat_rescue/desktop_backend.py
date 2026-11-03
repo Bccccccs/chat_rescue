@@ -28,7 +28,19 @@ def running_pid(executable):
     return None
 
 
+def ensure_launch_compatible():
+    # A shares the original identity/data directory. Only the two fixed copies
+    # may coexist; never terminate a user's running original automatically.
+    allowed = {(slot_app(slot)/'Contents/MacOS/WeChat').resolve() for slot in ('A', 'B')}
+    rows = subprocess.run(['/bin/ps', '-axo', 'comm='], check=True, capture_output=True, text=True).stdout.splitlines()
+    for row in rows:
+        executable = Path(row.strip())
+        if executable.name in ('WeChat', 'Weixin', '微信') and executable.resolve() not in allowed:
+            raise RuntimeError('原版微信仍在运行，与微信 A 共用账号目录。请切换到原版微信，按 ⌘Q 正常退出（只关窗口不算退出），然后回到这里重新点击打开当前微信。无需重新准备副本。')
+
+
 def launch_slots(slots):
+    ensure_launch_compatible()
     launched = {}
     for slot in slots:
         app, executable = cli.app_info(slot_app(slot))
@@ -50,6 +62,7 @@ def launch_slots(slots):
         except subprocess.TimeoutExpired:
             launched[slot] = {'state':'running','pid':process.pid}
         else:
+            ensure_launch_compatible()
             raise RuntimeError('账号 '+slot+' 启动后退出（退出码 '+str(code)+'）。日志：'+str(log))
     return {'launched':launched,'instruction':'微信副本进程已运行，请分别核对登录窗口与账号。扫码及手机确认由本人完成。'}
 
@@ -96,6 +109,7 @@ def authorized_request(request):
 def launch_via_terminal(slots):
     # Run from Terminal's existing permission context, including after an app rebuild.
     for slot in slots: cli.app_info(slot_app(slot))
+    ensure_launch_compatible()
     directory = new_job()
     request = directory/'launch-request.json'
     receipt = directory/'launch-result.json'
@@ -290,7 +304,7 @@ def dispatch(request):
         ops.ensure_closed()
         for slot in ('A','B'):
             prepare_slot(request['original'],slot)
-        return {'instruction':'两个副本已准备。首次授予权限后，点击打开两个微信。'}
+        return {'instruction':'两个副本已准备。首次授予权限后，先打开微信 A 登录并确认，再继续 B。'}
     if action=='capture-status':return capture_status(request['request'])
     if action=='ensure-closed':
         ops.ensure_closed();return {'state':'closed'}

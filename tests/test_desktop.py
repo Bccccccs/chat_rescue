@@ -35,6 +35,11 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(json.loads(output.with_suffix('.prepare.json').read_text())['signing_identifier'],'local.chat-rescue.wechat.A')
 
 class TerminalLaunchTests(unittest.TestCase):
+    def setUp(self):
+        guard = patch.object(backend, 'ensure_launch_compatible')
+        guard.start()
+        self.addCleanup(guard.stop)
+
     def test_terminal_request_refuses_arbitrary_or_recursive_actions(self):
         for action in ('execute-shell','authorized-request','launch'):
             with self.assertRaisesRegex(ValueError,'不支持'):
@@ -104,7 +109,36 @@ class SigningIntegrationTests(unittest.TestCase):
             self.assertEqual(identifiers,['Identifier=local.chat-rescue.wechat.A','Identifier=local.chat-rescue.wechat.B'])
             self.assertEqual(exe.read_bytes(),before)
 
-class LaunchTests(unittest.TestCase):
+class LaunchConflictTests(unittest.TestCase):
+    def test_running_original_is_reported_before_any_copy_starts(self):
+        from types import SimpleNamespace
+        with patch.object(backend.subprocess, 'run', return_value=SimpleNamespace(stdout='/Applications/WeChat.app/Contents/MacOS/WeChat\n')), patch.object(backend.subprocess, 'Popen') as popen:
+            with self.assertRaisesRegex(RuntimeError, '原版微信仍在运行'):
+                backend.launch_slots(['A'])
+            popen.assert_not_called()
+
+    def test_running_original_is_reported_before_opening_terminal(self):
+        with patch.object(backend.cli, 'app_info'), patch.object(backend, 'ensure_launch_compatible', side_effect=RuntimeError('原版微信仍在运行')), patch.object(backend, 'new_job') as job, patch.object(backend.cli, 'run') as opened:
+            with self.assertRaisesRegex(RuntimeError, '原版微信仍在运行'):
+                backend.launch_via_terminal(['A'])
+            job.assert_not_called()
+            opened.assert_not_called()
+
+    def test_fixed_copies_and_helpers_do_not_block_each_other(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as tmp, patch.object(backend, 'BASE', Path(tmp)):
+            paths = [str(backend.slot_app(s)/'Contents/MacOS/WeChat') for s in ('A', 'B')]
+            paths += ['/Applications/WeChat.app/Contents/MacOS/WeChatAppEx.app/Contents/MacOS/WeChatAppEx', '/usr/bin/other']
+            with patch.object(backend.subprocess, 'run', return_value=SimpleNamespace(stdout='\n'.join(paths))):
+                backend.ensure_launch_compatible()
+
+class IsolatedLauncherTests(unittest.TestCase):
+    def setUp(self):
+        guard = patch.object(backend, 'ensure_launch_compatible')
+        guard.start()
+        self.addCleanup(guard.stop)
+
+class LaunchTests(IsolatedLauncherTests):
     def test_quick_exit_is_reported_as_failure_instead_of_requested(self):
         with tempfile.TemporaryDirectory() as tmp:
             executable=Path(tmp)/'WeChat';executable.write_text('#!/bin/sh\nexit 7\n');executable.chmod(0o755)
@@ -163,7 +197,7 @@ class RootDiscoveryTests(unittest.TestCase):
                 roots=backend.cli.roots()['database_roots']
             self.assertEqual(set(roots),{str(original),str(isolated)})
 
-class WorkingDirectoryTests(unittest.TestCase):
+class WorkingDirectoryTests(IsolatedLauncherTests):
     def test_launcher_preserves_normal_working_directory(self):
         import shlex,signal
         with tempfile.TemporaryDirectory() as tmp:

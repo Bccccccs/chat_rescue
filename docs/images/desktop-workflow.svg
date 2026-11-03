@@ -4,10 +4,10 @@
 <text x="67" y="352" fill="#bfc7d8" font-size="17">准备固定 A / B 副本</text>
 <text x="67" y="394" fill="#bfc7d8" font-size="17">首次完成系统权限授权</text>
 <text x="295" y="305" fill="#376cf6" font-size="24">→</text>
-<rect x="315" y="150" width="245" height="300" rx="22" fill="#222733" stroke="#343d50"/><circle cx="355" cy="195" r="22" fill="#376cf6"/><text x="355" y="202" text-anchor="middle" fill="white" font-size="22">2</text><text x="337" y="255" fill="#ffffff" font-size="24" font-weight="bold">登录两个账号</text>
-<text x="337" y="310" fill="#bfc7d8" font-size="17">分别登录账号 A / B</text>
-<text x="337" y="352" fill="#bfc7d8" font-size="17">完成扫码与手机确认</text>
-<text x="337" y="394" fill="#bfc7d8" font-size="17">确认电脑上可见源聊天</text>
+<rect x="315" y="150" width="245" height="300" rx="22" fill="#222733" stroke="#343d50"/><circle cx="355" cy="195" r="22" fill="#376cf6"/><text x="355" y="202" text-anchor="middle" fill="white" font-size="22">2</text><text x="337" y="255" fill="#ffffff" font-size="24" font-weight="bold">依次登录 A、B</text>
+<text x="337" y="310" fill="#bfc7d8" font-size="17">先打开 A，登录并确认</text>
+<text x="337" y="352" fill="#bfc7d8" font-size="17">确认 A 后再打开并登录 B</text>
+<text x="337" y="394" fill="#bfc7d8" font-size="17">在 B 里检查旧聊天后继续</text>
 <text x="565" y="305" fill="#376cf6" font-size="24">→</text>
 <rect x="585" y="150" width="245" height="300" rx="22" fill="#222733" stroke="#343d50"/><circle cx="625" cy="195" r="22" fill="#376cf6"/><text x="625" y="202" text-anchor="middle" fill="white" font-size="22">3</text><text x="607" y="255" fill="#ffffff" font-size="24" font-weight="bold">读取双方聊天</text>
 <text x="607" y="310" fill="#bfc7d8" font-size="17">正常退出微信副本</text>
@@ -20,7 +20,7 @@
 <text x="877" y="394" fill="#bfc7d8" font-size="17">确认后才写入聊天库</text>
 <text x="1105" y="305" fill="#376cf6" font-size="24">→</text>
 <rect x="1125" y="150" width="245" height="300" rx="22" fill="#222733" stroke="#343d50"/><circle cx="1165" cy="195" r="22" fill="#376cf6"/><text x="1165" y="202" text-anchor="middle" fill="white" font-size="22">5</text><text x="1147" y="255" fill="#ffffff" font-size="24" font-weight="bold">检查恢复结果</text>
-<text x="1147" y="310" fill="#bfc7d8" font-size="17">打开两个微信检查</text>
+<text x="1147" y="310" fill="#bfc7d8" font-size="17">依次打开 A、B 检查</text>
 <text x="1147" y="352" fill="#bfc7d8" font-size="17">核对内容、时间与方向</text>
 <text x="1147" y="394" fill="#bfc7d8" font-size="17">手机迁移需单独验收</text>
 <text x="45" y="510" fill="#13b79e" font-size="20">预览前不写入 · 保留原件与回执 · 冲突停止 · 库变化拒绝应用或撤回</text><text x="45" y="550" fill="#a9afbc" font-size="17">仅支持授权单聊的部分消息类型；附件本体不恢复；客户端显示与手机迁移分别验收。</text></g></svg>

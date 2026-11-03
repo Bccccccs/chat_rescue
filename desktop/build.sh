@@ -16,7 +16,7 @@ CIPHER="${SQLCIPHER_LIBRARY:-/opt/homebrew/opt/sqlcipher/lib/libsqlcipher.dylib}
 APP='dist/Chat Rescue.app'
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 /usr/bin/ditto build/ChatRescue.icns "$APP/Contents/Resources/AppIcon.icns"
-xcrun swiftc -parse-as-library -O -target arm64-apple-macosx14.0 desktop/ChatRescue.swift -o "$APP/Contents/MacOS/ChatRescue"
+xcrun swiftc -parse-as-library -O -target arm64-apple-macosx14.0 desktop/LoginFlow.swift desktop/ChatRescue.swift -o "$APP/Contents/MacOS/ChatRescue"
 # ditto updates the build-owned backend directory; never includes account data.
 /usr/bin/ditto build/backend-dist/chat-rescue-backend "$APP/Contents/Resources/backend"
 .build-venv/bin/python - <<'PY'

@@ -13,3 +13,5 @@ python3.14 -W error::ResourceWarning -m unittest discover -s tests -v
 合成测试会替代平台/微信进程检查，不能证明另一平台可用，也不涵盖 LLDB 取钥、微信客户端显示或手机迁移。这些需按 SOP 在受支持环境人工验收。
 
 GitHub Actions 的 macOS 任务安装 SQLCipher 后执行相同测试，先要求依赖存在以避免集成测试静默跳过；工作流使用 [setup-python](https://github.com/actions/setup-python) 安装指定 Python。仓库首次发布时，以本机测试回执为已知结果，远程 CI 结果应查看 Actions 的实际运行状态。
+
+桌面顺序登录状态测试位于 `tests/test_login_flow.py`：有 Swift 编译器时编译运行实际 `desktop/LoginFlow.swift`，覆盖 A 未确认时禁止打开 B、未成功打开时不能确认、B 必须确认旧聊天、确认不跨阶段或会话复用。缺少 Swift 时该项跳过；构建脚本编译状态机和 SwiftUI 界面。
