@@ -7,9 +7,37 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
+from .runtime import make_private
 
 RELS = ('message/message_0.db', 'message/message_resource.db', 'session/session.db')
 SUPPORTED = {1, 42, (6 << 32) | 49}
+LEGACY_PROFILE = 'legacy-v1'
+WINDOWS_TEXT_PROFILE = 'windows-4.2.0.12-text'
+
+
+def direction_profile(value):
+    if value not in (LEGACY_PROFILE, WINDOWS_TEXT_PROFILE):
+        raise ValueError('unsupported message direction profile')
+    return value
+
+
+def plain_profile(root):
+    for name in ('export-report.json', 'direction-profile.json'):
+        path = Path(root) / name
+        if path.exists():
+            return direction_profile(json.loads(path.read_text(encoding='utf-8')).get('direction_profile', LEGACY_PROFILE))
+    return LEGACY_PROFILE
+
+
+def outgoing_flag(profile):
+    return 3 if direction_profile(profile) == WINDOWS_TEXT_PROFILE else 1
+
+
+def check_profile_type(local_type, *profiles):
+    if local_type not in SUPPORTED:
+        raise ValueError('unsupported message type: ' + str(local_type))
+    if WINDOWS_TEXT_PROFILE in profiles and local_type != 1:
+        raise ValueError('Windows 4.2.0.12 currently supports verified text directions only')
 
 
 def ident(name):
@@ -27,7 +55,7 @@ def digest(path):
 def private_json(path, value):
     path = Path(path)
     with path.open('x', encoding='utf-8') as f:
-        os.chmod(path, 0o600)
+        make_private(path)
         json.dump(value, f, ensure_ascii=False, indent=2)
 
 
@@ -97,7 +125,9 @@ def readvar(data, pos):
     raise ValueError('invalid packed integer')
 
 
-def flip_packed(data, old_sender, new_sender, outgoing):
+def flip_packed(data, old_sender, new_sender, outgoing, *, source_outgoing=1, target_outgoing=1):
+    if source_outgoing not in (1, 3) or target_outgoing not in (1, 3):
+        raise ValueError('unsupported packed direction profile')
     if not isinstance(data, bytes):
         raise ValueError('packed direction metadata missing')
     result, seen, pos = [], [], 0
@@ -123,8 +153,9 @@ def flip_packed(data, old_sender, new_sender, outgoing):
             result.append(varint(tag) + varint(new_sender))
             seen.append(1)
         elif field == 2:
-            wanted = 1 if outgoing else 2
-            if wire != 0 or value not in (1, 2) or value == wanted:
+            wanted = target_outgoing if outgoing else 2
+            expected = 2 if outgoing else source_outgoing
+            if wire != 0 or value != expected:
                 raise ValueError('packed direction is not the expected opposite perspective')
             result.append(varint(tag) + varint(wanted))
             seen.append(2)
@@ -148,6 +179,7 @@ def save_chat(plain_root, owner, peer, output):
     if owner == peer or '@' in owner or '@' in peer:
         raise ValueError('only two different personal WeChat identities are supported')
     _single_shard(root)
+    profile = plain_profile(root)
     with connect(root / 'contact/contact.db') as c:
         participants = [dict(r) for r in c.execute('SELECT * FROM contact WHERE username IN (?,?)', (owner, peer))]
         if {r['username'] for r in participants} != {owner, peer}:
@@ -165,12 +197,12 @@ def save_chat(plain_root, owner, peer, output):
             sender = names.get(row['real_sender_id'])
             if sender not in (owner, peer):
                 raise ValueError('message sender is outside the selected two parties')
-            if row['local_type'] not in SUPPORTED:
-                raise ValueError('unsupported message type: ' + str(row['local_type']))
+            check_profile_type(row['local_type'], profile)
             if not isinstance(row['server_id'], int) or row['server_id'] <= 0:
                 raise ValueError('a real positive server_id is required; no ID is fabricated')
             # Validate the observed opposite-account direction structure now.
-            flip_packed(row['packed_info_data'], row['real_sender_id'], 1, sender == peer)
+            flip_packed(row['packed_info_data'], row['real_sender_id'], 1, sender == peer,
+                        source_outgoing=outgoing_flag(profile), target_outgoing=outgoing_flag(profile))
             messages.append({'sender': sender, 'fields': row})
         if not messages or len({m['fields']['server_id'] for m in messages}) != len(messages):
             raise ValueError('conversation is empty or has duplicate server IDs')
@@ -185,7 +217,7 @@ def save_chat(plain_root, owner, peer, output):
         if session is None:
             raise ValueError('source conversation session metadata missing')
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
-    payload = {'version': 1, 'owner': owner, 'peer': peer, 'source_table': table,
+    payload = {'version': 1, 'owner': owner, 'peer': peer, 'source_table': table, 'direction_profile': profile,
                'schema': schema[0], 'indexes': indexes, 'participants': participants,
                'messages': messages, 'resources': resources, 'session': dict(session)}
     private_json(output / 'conversation.json', pack(payload))
@@ -209,12 +241,14 @@ def _insert(c, table, row):
 def prepare_plain_restore(bundle, target_root, target_owner, output):
     os.umask(0o077)
     bundle, target_root, output = Path(bundle), Path(target_root), Path(output)
-    manifest = json.loads((bundle / 'manifest.json').read_text())
+    manifest = json.loads((bundle / 'manifest.json').read_text(encoding='utf-8'))
     if manifest.get('version') != 1 or digest(bundle / 'conversation.json') != manifest.get('sha256'):
         raise ValueError('bundle version/hash mismatch')
-    data = unpack(json.loads((bundle / 'conversation.json').read_text()))
+    data = unpack(json.loads((bundle / 'conversation.json').read_text(encoding='utf-8')))
     if data.get('version') != 1 or target_owner != data['peer']:
         raise ValueError('target owner must be the source conversation peer')
+    source_profile = direction_profile(data.get('direction_profile', LEGACY_PROFILE))
+    target_profile = plain_profile(target_root)
     _single_shard(target_root)
     peer = data['owner']
     with connect(target_root / 'contact/contact.db') as c:
@@ -227,7 +261,7 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
         (output / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(target_root / rel, output / rel)
     table = table_for(peer)
-    local_ids, added_ids, skipped = {}, set(), 0
+    local_ids, added_ids, skipped, timestamp_variants = {}, set(), 0, 0
     with write_connect(output / RELS[0]) as c:
         c.row_factory = sqlite3.Row
         own_row = c.execute('SELECT rowid FROM Name2Id WHERE user_name=?', (target_owner,)).fetchone()
@@ -246,6 +280,7 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
                 c.execute(sql.replace(expected_source, table))
         for m in data['messages']:
             row = dict(m['fields'])
+            check_profile_type(row['local_type'], source_profile, target_profile)
             if row['local_type'] not in SUPPORTED or row['server_id'] <= 0 or m['sender'] not in (target_owner, peer):
                 raise ValueError('invalid message in bundle')
             outgoing = m['sender'] == target_owner
@@ -253,8 +288,10 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
             old_sender = row['real_sender_id']
             row.pop('local_id')
             row['real_sender_id'] = new_sender
-            row['packed_info_data'] = flip_packed(row['packed_info_data'], old_sender, new_sender, outgoing)
-            row['status'] = 3
+            row['packed_info_data'] = flip_packed(row['packed_info_data'], old_sender, new_sender, outgoing,
+                                                source_outgoing=outgoing_flag(source_profile),
+                                                target_outgoing=outgoing_flag(target_profile))
+            row['status'] = 2 if target_profile == WINDOWS_TEXT_PROFILE and outgoing else 3
             hits = []
             for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'"):
                 hits += [(name, dict(r)) for r in c.execute('SELECT * FROM ' + ident(name) + ' WHERE server_id=?', (row['server_id'],))]
@@ -262,8 +299,17 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
                 if len(hits) != 1 or hits[0][0] != table:
                     raise ValueError('server ID collision in another conversation')
                 existing = hits[0][1]
-                if any(existing[k] != row[k] for k in ['message_content', 'compress_content', 'local_type', 'create_time', 'real_sender_id']):
+                if any(existing[k] != row[k] for k in ['message_content', 'compress_content', 'local_type', 'real_sender_id']):
                     raise ValueError('server ID collision with different message contents/identity')
+                if existing['create_time'] != row['create_time']:
+                    # The paired Windows text sample has one second of local receive
+                    # latency, also reflected exactly in sort_seq. Keep each local
+                    # record unchanged; this exception never applies across profiles.
+                    delta = existing['create_time'] - row['create_time']
+                    if (source_profile != WINDOWS_TEXT_PROFILE or target_profile != WINDOWS_TEXT_PROFILE
+                            or abs(delta) != 1 or existing['sort_seq'] - row['sort_seq'] != delta * 1000):
+                        raise ValueError('server ID collision with different message contents/identity')
+                    timestamp_variants += 1
                 local_ids[row['server_id']] = existing['local_id']
                 skipped += 1
                 continue
@@ -327,5 +373,8 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
         with connect(output / rel) as c:
             if [tuple(r) for r in c.execute('PRAGMA integrity_check')] != [('ok',)]:
                 raise ValueError('candidate database integrity check failed')
+    private_json(output / 'direction-profile.json', {'version': 1, 'direction_profile': target_profile})
     return {'table': table, 'added': len(added_ids), 'skipped': skipped,
+            'timestamp_variants_preserved': timestamp_variants,
+            'source_direction_profile': source_profile, 'target_direction_profile': target_profile,
             'own_sender_id': own_id, 'peer_sender_id': peer_id, 'attachments_restored': False}

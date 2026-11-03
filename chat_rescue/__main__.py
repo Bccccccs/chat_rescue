@@ -12,6 +12,7 @@ from . import __version__
 from .workflow import save_chat, connect, digest, private_json
 from .operations import ALL, mac_only, ensure_closed, check_owner, export_root, make_plan, apply_plan
 from .vendor.sqlcipher_probe import library, load_key, DB
+from .runtime import supported_host
 
 
 def run(args):
@@ -150,37 +151,95 @@ def contacts(root, query):
     return {'contacts': [r for r in rows if query.casefold() in ' '.join(str(v or '') for v in r.values()).casefold()]}
 
 
-def roots():
+def roots(search_paths=None):
+    if platform.system() == 'Windows':
+        import ctypes
+        # CSIDL_PERSONAL follows redirected Documents (including OneDrive).
+        documents = ctypes.create_unicode_buffer(32768)
+        rc = ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, documents)
+        bases = [Path(documents.value) / 'xwechat_files'] if rc == 0 else []
+        bases += [Path.home() / 'Documents/xwechat_files']
+        bases += [Path(p).expanduser().resolve(strict=True) for p in search_paths or []]
+        found = set()
+        for base in bases:
+            candidates = [base] if base.name == 'db_storage' else base.glob('*/db_storage')
+            found.update(str(p.resolve()) for p in candidates if p.is_dir())
+        return {'database_roots': sorted(found),
+                'instruction': '请本人核对账号；自定义位置用 roots --search-path 指定 xwechat_files 或 db_storage，不能按修改时间选账号。'}
     identifiers = ('com.tencent.xinWeChat', 'local.chat-rescue.wechat.A', 'local.chat-rescue.wechat.B')
     found = []
     for identifier in identifiers:
         base = Path.home() / 'Library/Containers' / identifier / 'Data/Documents/xwechat_files'
         found.extend(str(p) for p in sorted(base.glob('*/db_storage')))
+    for base in search_paths or []:
+        base = Path(base).expanduser().resolve(strict=True)
+        found.extend(str(p) for p in ([base] if base.name == 'db_storage' else sorted(base.glob('*/db_storage'))) if p.is_dir())
     return {'database_roots': found,
             'instruction': '从刚登录账号核对目录，不能自动根据修改时间选择账号。'}
 
 
 def doctor():
-    checks = {'macOS_Apple_Silicon': platform.system() == 'Darwin' and platform.machine() == 'arm64',
-              'python_3_14': sys.version_info >= (3, 14)}
+    windows = platform.system() == 'Windows'
+    try:
+        supported_host(); host = True
+    except RuntimeError:
+        host = False
+    checks = {'supported_host': host, 'python_3_14': sys.version_info >= (3, 14)}
     try:
         library(); checks['sqlcipher'] = True
     except (RuntimeError, OSError):
         checks['sqlcipher'] = False
-    try:
-        run(['/usr/bin/lldb', '-P']); checks['apple_lldb'] = True
-    except (RuntimeError, OSError):
-        checks['apple_lldb'] = False
+    if not windows:
+        try:
+            run(['/usr/bin/lldb', '-P']); checks['apple_lldb'] = True
+        except (RuntimeError, OSError):
+            checks['apple_lldb'] = False
     return {'version': __version__, 'checks': checks, 'ready': all(checks.values()),
-            'supported_wechat': '4.1.13', 'instruction': '失败项见 README；系统权限需首次取钥时验证。'}
+            'supported_wechat': 'Windows: 未完成客户端实测，仅接受兼容四库结构与 SQLCipher 4' if windows else '4.1.13',
+            'key_capture_available': not windows and host,
+            'experimental_windows_capture_available': windows and host,
+            'windows_capture_target': '4.2.0.x x64, pending client validation' if windows else None,
+            'instruction': 'Windows ready 仅指离线依赖就绪；需要本人授权的已有密钥文件，先运行 verify-keys。' if windows else '失败项见 README；系统权限需首次取钥时验证。'}
+
+
+def verify_keys(root, keys):
+    supported_host(); ensure_closed()
+    root = Path(root).resolve(strict=True)
+    from .workflow import _single_shard
+    _single_shard(root)
+    for rel in ALL:
+        with DB(root / rel, load_key(keys, root / rel)) as database:
+            if database.query('PRAGMA integrity_check;') != [{'integrity_check': 'ok'}]:
+                raise ValueError('必要数据库完整性验证失败：' + rel)
+    return {'verified_required_databases': len(ALL),
+            'instruction': '四库密钥与完整性验证通过；尚需核对双方身份与数据库结构。'}
 
 
 def main():
+    if os.name == 'nt':
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, 'reconfigure'):
+                stream.reconfigure(encoding='utf-8')
     os.umask(0o077)
-    p = argparse.ArgumentParser(description='微信双方授权单聊恢复：Mac experimental')
+    p = argparse.ArgumentParser(description='微信双方授权单聊恢复：Mac / Windows offline experimental')
     p.add_argument('--version', action='version', version=__version__)
     commands = p.add_subparsers(dest='command', required=True)
-    commands.add_parser('doctor'); commands.add_parser('roots')
+    commands.add_parser('doctor')
+    c = commands.add_parser('init-work'); c.add_argument('--output', required=True)
+    c = commands.add_parser('roots'); c.add_argument('--search-path', action='append')
+    c = commands.add_parser('verify-keys'); c.add_argument('--db-root', required=True); c.add_argument('--keys', required=True)
+    c = commands.add_parser('inspect-windows-app'); c.add_argument('--exe', required=True)
+    c = commands.add_parser('capture-windows-keys')
+    c.add_argument('--pid', type=int, required=True); c.add_argument('--exe', required=True)
+    c.add_argument('--db-root', required=True); c.add_argument('--owner', required=True)
+    c.add_argument('--output', required=True); c.add_argument('--timeout', type=int, default=120)
+    c = commands.add_parser('plan-sync')
+    for slot in ('a', 'b'):
+        for field in ('root', 'keys', 'owner'):
+            c.add_argument('--' + slot + '-' + field, required=True)
+    c.add_argument('--output', required=True)
+    c = commands.add_parser('apply-sync'); c.add_argument('--plan', required=True)
+    c = commands.add_parser('undo-sync'); c.add_argument('--plan', required=True)
     c = commands.add_parser('prepare-key-app'); c.add_argument('--app', required=True); c.add_argument('--output', required=True)
     c = commands.add_parser('capture-keys'); c.add_argument('--app', required=True); c.add_argument('--db-root', required=True); c.add_argument('--output', required=True); c.add_argument('--original-app'); c.add_argument('--timeout', type=int, default=180)
     c = commands.add_parser('export-db'); c.add_argument('--db-root', required=True); c.add_argument('--keys', required=True); c.add_argument('--output', required=True)
@@ -193,13 +252,29 @@ def main():
         if a.command == 'doctor':
             result = doctor()
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0 if result['ready'] else 2
-        if a.command == 'roots': result = roots()
+        if a.command == 'roots': result = roots(a.search_path)
+        elif a.command == 'init-work':
+            from .operations import fresh
+            result = {'workspace': str(fresh(a.output))}
+        elif a.command == 'verify-keys': result = verify_keys(a.db_root, a.keys)
+        elif a.command == 'inspect-windows-app':
+            from .windows_capture import app_info as windows_app_info
+            result = windows_app_info(a.exe)
+        elif a.command == 'capture-windows-keys':
+            from .windows_capture import capture as windows_capture
+            result = windows_capture(a.pid, a.exe, a.db_root, a.owner, a.output, a.timeout)
+        elif a.command == 'plan-sync':
+            from .sync import make_sync_plan
+            result = make_sync_plan(*({field: getattr(a, slot + '_' + field) for field in ('root', 'keys', 'owner')} for slot in ('a', 'b')), a.output)
+        elif a.command in ('apply-sync', 'undo-sync'):
+            from .sync import apply_sync_plan, undo_sync_plan
+            result = (apply_sync_plan if a.command == 'apply-sync' else undo_sync_plan)(a.plan)
         elif a.command == 'prepare-key-app': result = prepare(a.app, a.output)
         elif a.command == 'capture-keys': result = capture(a)
         elif a.command == 'export-db': result = export_root(a.db_root, a.keys, a.output)
         elif a.command == 'contacts': result = contacts(a.plain_root, a.query)
         elif a.command == 'save-chat':
-            r = json.loads((Path(a.plain_root) / 'export-report.json').read_text())
+            r = json.loads((Path(a.plain_root) / 'export-report.json').read_text(encoding='utf-8'))
             account = r['account_directory']
             if account != a.owner and not account.startswith(a.owner + '_'):
                 raise ValueError('owner 与导出账号目录不匹配')

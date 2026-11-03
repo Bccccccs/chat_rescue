@@ -11,8 +11,8 @@ class CLITests(unittest.TestCase):
  def setUp(self):
   try:library()
   except (OSError,RuntimeError):self.skipTest('SQLCipher library required for integration')
-  gate=patch('chat_rescue.operations.mac_only');gate.start();self.addCleanup(gate.stop)
-  self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name)
+  gate=patch('chat_rescue.operations.supported_host');gate.start();self.addCleanup(gate.stop)
+  self.tmp=tempfile.TemporaryDirectory(prefix='chat-rescue-中文-');self.root=Path(self.tmp.name)
   self.source=self.encrypted(B,True);self.target=self.encrypted(A,False)
  def tearDown(self):
   if hasattr(self,'tmp'):self.tmp.cleanup()
@@ -27,7 +27,7 @@ class CLITests(unittest.TestCase):
    candidate=Path(str(live/rel)+'.candidate');encrypt_database(plain/rel,candidate,live/rel,keys);os.replace(candidate,live/rel)
   return live,keys
  def cli(self,*args):
-  p=subprocess.run([sys.executable,'-m','chat_rescue',*map(str,args)],capture_output=True,text=True)
+  p=subprocess.run([sys.executable,'-m','chat_rescue',*map(str,args)],capture_output=True,text=True,encoding="utf-8")
   self.assertEqual(p.returncode,0,p.stderr);return json.loads(p.stdout)
  def test_complete_encrypted_recovery_and_cli_identity_query(self):
   live,keys=self.source;target,target_keys=self.target
@@ -46,5 +46,5 @@ class CLITests(unittest.TestCase):
  def test_cli_wrong_owner_refused(self):
   live,keys=self.source
   with patch('chat_rescue.operations.ensure_closed'):export_root(live,keys,self.root/'export')
-  p=subprocess.run([sys.executable,'-m','chat_rescue','save-chat','--plain-root',str(self.root/'export'),'--owner',A,'--peer',B,'--output',str(self.root/'bundle')],capture_output=True,text=True)
+  p=subprocess.run([sys.executable,'-m','chat_rescue','save-chat','--plain-root',str(self.root/'export'),'--owner',A,'--peer',B,'--output',str(self.root/'bundle')],capture_output=True,text=True,encoding="utf-8")
   self.assertEqual(p.returncode,2);self.assertFalse((self.root/'bundle').exists())

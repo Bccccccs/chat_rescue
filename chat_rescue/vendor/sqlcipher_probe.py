@@ -16,17 +16,26 @@ import re
 import shutil
 import tempfile
 import time
+from chat_rescue.runtime import require_private
 
 
 def library():
     candidates = [os.environ.get('SQLCIPHER_LIBRARY'),
+                  ctypes.util.find_library('sqlcipher') if os.name == 'nt' else None,
                   '/opt/homebrew/opt/sqlcipher/lib/libsqlcipher.dylib',
                   '/usr/local/opt/sqlcipher/lib/libsqlcipher.dylib',
                   ctypes.util.find_library('sqlcipher')]
     name = next((x for x in candidates if x and (not x.startswith('/') or Path(x).exists())), None)
     if not name:
-        raise RuntimeError('SQLCipher library missing; install with brew install sqlcipher')
-    lib = C.CDLL(name)
+        raise RuntimeError('SQLCipher library missing; Windows: set SQLCIPHER_LIBRARY to an absolute SQLCipher DLL path; macOS: brew install sqlcipher')
+    # An explicit DLL directory also resolves its OpenSSL/runtime dependencies.
+    if os.name == 'nt' and Path(name).is_absolute():
+        with os.add_dll_directory(str(Path(name).parent)):
+            lib = C.CDLL(name)
+    else:
+        lib = C.CDLL(name)
+    if not hasattr(lib, 'sqlite3_key'):
+        raise RuntimeError('所选库不是 SQLCipher；不能使用普通 SQLite DLL')
     lib.sqlite3_open_v2.argtypes = [C.c_char_p, C.POINTER(C.c_void_p), C.c_int, C.c_char_p]
     lib.sqlite3_open_v2.restype = C.c_int
     lib.sqlite3_close.argtypes = [C.c_void_p]
@@ -45,7 +54,7 @@ class DB:
         self.lib = library()
         self.ptr = C.c_void_p()
         flags = 6 if fixture_write else 1  # READWRITE|CREATE, or READONLY
-        rc = self.lib.sqlite3_open_v2(os.fsencode(path), C.byref(self.ptr), flags, None)
+        rc = self.lib.sqlite3_open_v2(str(path).encode('utf-8'), C.byref(self.ptr), flags, None)
         if rc:
             self.close()
             raise RuntimeError(f'SQLCipher open failed (code {rc})')
@@ -92,9 +101,8 @@ class DB:
 
 def load_key(path, db_path):
     p = Path(path)
-    if p.stat().st_mode & 0o077:
-        raise RuntimeError('key file must be private (chmod 600)')
-    data = json.loads(p.read_text())
+    require_private(p)
+    data = json.loads(p.read_text(encoding='utf-8-sig'))
     if isinstance(data, dict) and isinstance(data.get('keys'), dict):
         data = data['keys']
     if not isinstance(data, dict):
@@ -105,8 +113,8 @@ def load_key(path, db_path):
     entries = []
     for name, value in data.items():
         normalized = name.replace('\\', '/')
-        absolute_match = normalized.startswith('/') and Path(normalized).resolve() == target
-        if normalized == salt or str(target).endswith('/' + normalized) or absolute_match:
+        absolute_match = Path(normalized).is_absolute() and Path(normalized).resolve() == target
+        if normalized == salt or target.as_posix().endswith('/' + normalized) or absolute_match:
             if isinstance(value, dict):
                 value = value.get('enc_key', value.get('key'))
             if isinstance(value, str) and re.fullmatch('[0-9a-fA-F]{64}', value):

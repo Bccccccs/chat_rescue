@@ -14,6 +14,7 @@ class DesktopTests(unittest.TestCase):
     def test_invalid_slot_cannot_escape_application_directory(self):
         with self.assertRaises(ValueError): backend.slot_app('../../elsewhere')
 
+    @unittest.skipUnless(os.name == 'posix', 'macOS desktop integration')
     def test_different_signing_identifiers_are_used_for_copies(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);original=root/'original.app';exe=original/'Contents/MacOS/WeChat'
@@ -32,7 +33,7 @@ class DesktopTests(unittest.TestCase):
             self.assertTrue(any('--deep' in c and '--identifier' not in c for c in calls))
             self.assertIn('local.chat-rescue.wechat.A',sign)
             self.assertEqual(exe.read_bytes(),b'original')
-            self.assertEqual(json.loads(output.with_suffix('.prepare.json').read_text())['signing_identifier'],'local.chat-rescue.wechat.A')
+            self.assertEqual(json.loads(output.with_suffix('.prepare.json').read_text(encoding='utf-8'))['signing_identifier'],'local.chat-rescue.wechat.A')
 
 class TerminalLaunchTests(unittest.TestCase):
     def test_terminal_request_refuses_arbitrary_or_recursive_actions(self):
@@ -44,7 +45,7 @@ class TerminalLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
             def opened(args):
-                request=json.loads((root/'operation-request.json').read_text())
+                request=json.loads((root/'operation-request.json').read_text(encoding='utf-8'))
                 self.assertEqual(request['action'],'inspect')
                 (root/'operation-result.json').write_text(json.dumps({'ok':True,'result':{'owner':{'nick_name':'合成昵称'}}}))
             with patch.object(backend,'new_job',return_value=root),patch.object(backend.cli,'run',side_effect=opened):
@@ -57,7 +58,7 @@ class TerminalLaunchTests(unittest.TestCase):
             request=Path(tmp)/'launch-request.json';request.write_text(json.dumps({'slots':['A']}))
             with patch.object(sys,'argv',['backend','--launch-file',str(request)]), patch.object(backend,'launch_slots',side_effect=RuntimeError('账号 A 启动后退出（退出码 255）')):
                 self.assertEqual(backend.main(),2)
-            result=json.loads((request.parent/'launch-result.json').read_text())
+            result=json.loads((request.parent/'launch-result.json').read_text(encoding='utf-8'))
             self.assertFalse(result['ok']);self.assertIn('255',result['error'])
 
     def test_terminal_failure_is_propagated_to_gui(self):
@@ -105,6 +106,7 @@ class SigningIntegrationTests(unittest.TestCase):
             self.assertEqual(exe.read_bytes(),before)
 
 class LaunchTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'posix', 'macOS desktop integration')
     def test_quick_exit_is_reported_as_failure_instead_of_requested(self):
         with tempfile.TemporaryDirectory() as tmp:
             executable=Path(tmp)/'WeChat';executable.write_text('#!/bin/sh\nexit 7\n');executable.chmod(0o755)
@@ -112,6 +114,7 @@ class LaunchTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'7'):
                     backend.dispatch({'action':'launch','slots':['A']})
 
+    @unittest.skipUnless(os.name == 'posix', 'macOS desktop integration')
     def test_launch_detaches_process_and_reports_actual_pid(self):
         import signal,subprocess
         with tempfile.TemporaryDirectory() as tmp:
@@ -153,6 +156,7 @@ class BundleIdentityTests(unittest.TestCase):
             with self.assertRaises(ValueError):backend.cli.app_info(root/'B.app')
 
 class RootDiscoveryTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'posix', 'macOS desktop integration')
     def test_isolated_b_database_directory_is_discoverable(self):
         with tempfile.TemporaryDirectory() as tmp:
             home=Path(tmp)
@@ -164,6 +168,7 @@ class RootDiscoveryTests(unittest.TestCase):
             self.assertEqual(set(roots),{str(original),str(isolated)})
 
 class WorkingDirectoryTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'posix', 'macOS desktop integration')
     def test_launcher_preserves_normal_working_directory(self):
         import shlex,signal
         with tempfile.TemporaryDirectory() as tmp:
@@ -222,6 +227,7 @@ class CaptureWaitTests(unittest.TestCase):
             result=backend.capture_status(root/'capture-request.json')
             self.assertEqual(result['state'],'failed')
 
+    @unittest.skipUnless(os.name == 'posix', 'macOS desktop integration')
     def test_closed_terminal_without_receipt_is_detected(self):
         from chat_rescue.workflow import private_json
         with tempfile.TemporaryDirectory() as tmp:
