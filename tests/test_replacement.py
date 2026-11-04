@@ -22,8 +22,10 @@ class ReplacementTests(unittest.TestCase):
         self.a_plain = self.root / (A + '-plain')
         self.b_plain = self.root / (B + '-plain')
         with db(self.b_plain / ops.ALL[0]) as c:
+            c.execute('UPDATE ' + table_for(A) + ' SET packed_info_data=? WHERE server_id=101',
+                      (bytes.fromhex('080710093a0178'),))
             c.execute('UPDATE ' + table_for(A) + ' SET packed_info_data=? WHERE server_id=102',
-                      (bytes.fromhex('08091003'),))
+                      (bytes.fromhex('08091007'),))
         # A's existing chat deliberately has an unsupported direction. It is
         # counted and backed up, never exported as a source conversation.
         with db(self.a_plain / ops.ALL[0]) as c:
@@ -101,7 +103,7 @@ class ReplacementTests(unittest.TestCase):
         a, ak = self.target; b, bk = self.source
         with patch('chat_rescue.operations.ensure_closed'), self.assertRaises(DirectionMismatch) as caught:
             make_replace_plan({'owner':A,'root':str(a),'keys':str(ak)}, {'owner':B,'root':str(b),'keys':str(bk)}, other/'plan')
-        self.assertEqual((caught.exception.actual,caught.exception.expected,caught.exception.local_type), (4,3,42))
+        self.assertEqual((caught.exception.actual,caught.exception.expected,caught.exception.local_type), (4,7,42))
         self.assertFalse((other/'plan/sync-plan.json').exists())
         self.assertEqual(ops.state(self.target[0]), self.a_before)
 

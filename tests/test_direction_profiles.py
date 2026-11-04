@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from chat_rescue.workflow import (WINDOWS_TEXT_PROFILE, WINDOWS_STRUCTURED_PROFILE, LEGACY_PROFILE, flip_packed, private_json,
+from chat_rescue.workflow import (WINDOWS_TEXT_PROFILE, WINDOWS_STRUCTURED_PROFILE, WINDOWS_PARTICIPANT_PROFILE, LEGACY_PROFILE, flip_packed, private_json,
                                   prepare_plain_restore, save_chat, table_for, connect)
 from chat_rescue.operations import capture_direction_profile
 from chat_rescue.windows_version import is_windows_42_version
@@ -108,6 +108,8 @@ class DirectionProfileTests(unittest.TestCase):
             with self.subTest(version=version):
                 receipt.write_text(json.dumps({**valid, 'file_version': version}), encoding='utf-8')
                 self.assertEqual(capture_direction_profile(root, keys), WINDOWS_STRUCTURED_PROFILE)
+        receipt.write_text(json.dumps({**valid, 'file_version':'4.2.0.13'}),encoding='utf-8')
+        self.assertEqual(capture_direction_profile(root,keys),WINDOWS_PARTICIPANT_PROFILE)
 
     def test_complete_42_versions_only(self):
         for version in ('4.2.0.0', '4.2.0.12', '4.2.1.25', '4.2.99.999'):

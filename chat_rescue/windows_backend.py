@@ -330,7 +330,7 @@ def main():
     except (OSError, ValueError, RuntimeError, KeyError) as error:
         detail = str(error)
         if isinstance(error, DirectionMismatch):
-            detail = (f'B→A 候选方向校验失败：实际值={error.actual}，预期值={error.expected}，'
+            detail = (f'B→A 候选字段2校验失败：实际值={error.actual}，预期值={error.expected}，'
                       f'字段编码={error.wire}，类型={error.local_type}，配置={error.profile}。'
                       '本次未应用；请保留任务，不修改消息字段。')
         elif 'packed direction is not the expected opposite perspective' in detail:

@@ -4,7 +4,7 @@ import os
 import platform
 from pathlib import Path
 import shutil
-from .workflow import _single_shard, RELS, digest, private_json, prepare_plain_restore, LEGACY_PROFILE, WINDOWS_STRUCTURED_PROFILE
+from .workflow import _single_shard, RELS, digest, private_json, prepare_plain_restore, LEGACY_PROFILE, WINDOWS_STRUCTURED_PROFILE, WINDOWS_PARTICIPANT_PROFILE
 from .cipher import export_database, encrypt_database
 from .voice import MEDIA, CAPABILITY, single_media
 from .runtime import supported_host, ensure_closed, exclusive_lock, make_private
@@ -164,6 +164,8 @@ def capture_direction_profile(root, keys):
     check_owner(root, value.get('owner') or 'invalid-owner')
     if not is_windows_42_version(value.get('file_version')):
         raise ValueError('Windows 恢复目前仅接受 4.2.x.x 完整版本的取钥回执')
+    if value['file_version'] == '4.2.0.13':
+        return WINDOWS_PARTICIPANT_PROFILE
     # Preserve the structured profile identifier and per-message validation.
     return WINDOWS_STRUCTURED_PROFILE
 

@@ -16,7 +16,8 @@ SUPPORTED = {1, 42, (6 << 32) | 49}
 LEGACY_PROFILE = 'legacy-v1'
 WINDOWS_TEXT_PROFILE = 'windows-4.2.0.12-text'
 WINDOWS_STRUCTURED_PROFILE = 'windows-4.2.0.12-structured'
-WINDOWS_PROFILES = (WINDOWS_TEXT_PROFILE, WINDOWS_STRUCTURED_PROFILE)
+WINDOWS_PARTICIPANT_PROFILE = 'windows-4.2.0.13-participant-ids'
+WINDOWS_PROFILES = (WINDOWS_TEXT_PROFILE, WINDOWS_STRUCTURED_PROFILE, WINDOWS_PARTICIPANT_PROFILE)
 
 
 def direction_profile(value):
@@ -35,6 +36,14 @@ def plain_profile(root):
 
 def outgoing_flag(profile):
     return 3 if direction_profile(profile) in WINDOWS_PROFILES else 1
+
+
+def validate_participant_ids(mapping, owner, peer):
+    if (not isinstance(mapping, dict) or set(mapping) != {owner, peer}
+            or any(type(v) is not int or not 0 < v < (1 << 63) for v in mapping.values())
+            or mapping[owner] == mapping[peer]):
+        raise ValueError('source/target shard participant identity mapping is incomplete or invalid')
+    return mapping
 
 
 def check_profile_type(local_type, *profiles, include_voice=False, include_attachments=False):
@@ -142,11 +151,15 @@ class DirectionMismatch(ValueError):
                          f' (actual={actual}, expected={expected}, wire={wire})')
 
 
-def flip_packed(data, old_sender, new_sender, outgoing, *, source_outgoing=1, target_outgoing=1):
+def flip_packed(data, old_sender, new_sender, outgoing, *, source_outgoing=1, target_outgoing=1,
+                old_recipient=None, new_recipient=None):
     if source_outgoing not in (1, 3) or target_outgoing not in (1, 3):
         raise ValueError('unsupported packed direction profile')
     if not isinstance(data, bytes):
         raise ValueError('packed direction metadata missing')
+    for recipient, sender in ((old_recipient, old_sender), (new_recipient, new_sender)):
+        if recipient is not None and (type(recipient) is not int or not 0 < recipient < (1 << 63) or recipient == sender):
+            raise ValueError('packed recipient identity mapping is invalid')
     result, seen, pos = [], [], 0
     while pos < len(data):
         start = pos
@@ -172,6 +185,10 @@ def flip_packed(data, old_sender, new_sender, outgoing, *, source_outgoing=1, ta
         elif field == 2:
             wanted = target_outgoing if outgoing else 2
             expected = 2 if outgoing else source_outgoing
+            if old_recipient is not None:
+                expected = old_recipient
+            if new_recipient is not None:
+                wanted = new_recipient
             if wire != 0 or value != expected:
                 raise DirectionMismatch(value, expected, wire)
             result.append(varint(tag) + varint(wanted))
@@ -216,7 +233,7 @@ def message_hits(root, server_ids):
     return hits
 
 
-def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_missing_voice=False, include_attachments=False, allow_missing_attachments=False, asset_root=None, exclude_system_messages=False):
+def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_missing_voice=False, include_attachments=False, allow_missing_attachments=False, asset_root=None, exclude_system_messages=False, participant_identity_layout=False):
     os.umask(0o077)
     root, output = Path(plain_root), Path(output)
     if owner == peer or '@' in owner or '@' in peer:
@@ -237,7 +254,11 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
         if any(digest(root / rel) != value for rel, value in report['exported'].items()):
             raise ValueError('导出数据库哈希改变')
     profile = plain_profile(root)
-    if exclude_system_messages and profile != WINDOWS_STRUCTURED_PROFILE:
+    if participant_identity_layout:
+        if profile not in WINDOWS_PROFILES or include_voice or include_attachments:
+            raise ValueError('参与者编号模式需要已绑定 Windows 回执的基础导出')
+        profile = WINDOWS_PARTICIPANT_PROFILE
+    if exclude_system_messages and profile not in (WINDOWS_STRUCTURED_PROFILE, WINDOWS_PARTICIPANT_PROFILE):
         raise ValueError('单向重建需要配套 Windows structured 取钥回执，请保留原任务')
     excluded_system = {}
     with connect(root / 'contact/contact.db') as c:
@@ -246,7 +267,7 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
             raise ValueError('owner/peer must be exact usernames in the contact database')
     table = table_for(peer)
     schema, indexes, columns = None, [], None
-    messages, unique, source_shards = [], {}, []
+    messages, unique, source_shards, participant_ids = [], {}, [], {}
     for rel in shards:
         with connect(root / rel) as c:
             found = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
@@ -260,6 +281,9 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
                 raise ValueError('incompatible message schema across source shards')
             source_shards.append(rel)
             names = {r['rowid']: r['user_name'] for r in c.execute('SELECT rowid,user_name FROM Name2Id')}
+            if profile == WINDOWS_PARTICIPANT_PROFILE:
+                participant_ids[rel] = validate_participant_ids({name: rowid for rowid, name in names.items()
+                                                               if name in (owner, peer)}, owner, peer)
             for raw in c.execute('SELECT * FROM ' + ident(table) + ' ORDER BY sort_seq,local_id'):
                 row = dict(raw)
                 # Explicitly deferred types in the single-conversation rebuild mode.
@@ -279,7 +303,10 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
                 try:
                     canonical['packed_info_data'] = flip_packed(
                         row['packed_info_data'], row['real_sender_id'], 1, sender == peer,
-                        source_outgoing=outgoing_flag(profile), target_outgoing=outgoing_flag(profile))
+                        source_outgoing=outgoing_flag(profile), target_outgoing=outgoing_flag(profile),
+                        old_recipient=(participant_ids[rel][peer if sender == owner else owner]
+                                       if profile == WINDOWS_PARTICIPANT_PROFILE else None),
+                        new_recipient=2 if profile == WINDOWS_PARTICIPANT_PROFILE else None)
                 except DirectionMismatch as error:
                     error.profile, error.local_type = profile, row['local_type']
                     raise
@@ -324,6 +351,8 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
     payload = {'version': 1, 'owner': owner, 'peer': peer, 'source_table': table, 'direction_profile': profile,
                'schema': schema, 'indexes': indexes, 'participants': participants, 'source_shards': source_shards,
                'messages': messages, 'resources': resources, 'session': dict(session)}
+    if profile == WINDOWS_PARTICIPANT_PROFILE:
+        payload['participant_ids'] = participant_ids
     if include_voice:
         from .voice import collect, CAPABILITY
         if profile != LEGACY_PROFILE:
@@ -402,10 +431,13 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
             or len(set(server_ids)) != len(server_ids)):
         raise ValueError('invalid or duplicate server IDs in bundle')
     hits_by_id = message_hits(target_root, server_ids)
-    containing, max_local_id = [], 0
+    containing, max_local_id, target_participant_ids = [], 0, {}
     table = table_for(peer)
     for rel in shards:
         with connect(target_root / rel) as c:
+            if target_profile == WINDOWS_PARTICIPANT_PROFILE:
+                target_participant_ids[rel] = {r['user_name']: r['rowid'] for r in c.execute(
+                    'SELECT rowid,user_name FROM Name2Id WHERE user_name IN (?,?)', (target_owner, peer))}
             if table in message_tables(c):
                 containing.append(rel)
                 max_local_id = max(max_local_id, c.execute('SELECT coalesce(max(local_id),0) FROM ' + ident(table)).fetchone()[0])
@@ -457,14 +489,24 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
             outgoing = m['sender'] == target_owner
             new_sender = own_id if outgoing else peer_id
             old_sender = row['real_sender_id']
+            old_recipient = None
+            if source_profile == WINDOWS_PARTICIPANT_PROFILE:
+                source_ids = validate_participant_ids(data.get('participant_ids', {}).get(m.get('source_shard')),
+                                                      data['owner'], data['peer'])
+                if source_ids[m['sender']] != old_sender:
+                    raise ValueError('bundle source sender conflicts with shard identity mapping')
+                old_recipient = source_ids[peer if outgoing else target_owner]
             row.pop('local_id')
             row['real_sender_id'] = new_sender
             row['packed_info_data'] = flip_packed(row['packed_info_data'], old_sender, new_sender, outgoing,
                                                 source_outgoing=outgoing_flag(source_profile),
-                                                target_outgoing=outgoing_flag(target_profile))
+                                                target_outgoing=outgoing_flag(target_profile),
+                                                old_recipient=old_recipient,
+                                                new_recipient=(peer_id if outgoing else own_id)
+                                                if target_profile == WINDOWS_PARTICIPANT_PROFILE else None)
             # Nontext playback/download states are not text sent/read flags.
             # Like the upstream Mac media adapter, retain their original state.
-            if ((target_profile != WINDOWS_STRUCTURED_PROFILE or row['local_type'] == 1)
+            if ((target_profile not in (WINDOWS_STRUCTURED_PROFILE, WINDOWS_PARTICIPANT_PROFILE) or row['local_type'] == 1)
                     and not (voice_mode and row['local_type'] == 34)
                     and not (attachment_mode and row['local_type'] in (3,43,(6<<32)|49))):
                 row['status'] = 2 if target_profile in WINDOWS_PROFILES and outgoing else 3
@@ -473,12 +515,20 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
                 if any(hit[1] != table for hit in hits):
                     raise ValueError('server ID collision in another conversation')
                 time_variant = False
-                for _, _, existing, existing_sender in hits:
+                for hit_rel, _, existing, existing_sender in hits:
                     if existing_sender != m['sender'] or any(existing[k] != row[k] for k in ['message_content', 'compress_content', 'local_type']):
                         raise ValueError('server ID collision with different message contents/identity')
                     # Validate using this hit's own shard-local sender mapping.
+                    existing_recipient = None
+                    if target_profile == WINDOWS_PARTICIPANT_PROFILE:
+                        hit_ids = validate_participant_ids(target_participant_ids[hit_rel], target_owner, peer)
+                        if hit_ids[existing_sender] != existing['real_sender_id']:
+                            raise ValueError('existing sender conflicts with shard identity mapping')
+                        existing_recipient = hit_ids[peer if outgoing else target_owner]
                     flip_packed(existing['packed_info_data'], existing['real_sender_id'], 1, not outgoing,
-                                source_outgoing=outgoing_flag(target_profile), target_outgoing=outgoing_flag(target_profile))
+                                source_outgoing=outgoing_flag(target_profile), target_outgoing=outgoing_flag(target_profile),
+                                old_recipient=existing_recipient,
+                                new_recipient=2 if target_profile == WINDOWS_PARTICIPANT_PROFILE else None)
                     if existing['create_time'] != row['create_time']:
                         delta = existing['create_time'] - row['create_time']
                         if (row['local_type'] != 1 or source_profile not in WINDOWS_PROFILES or target_profile not in WINDOWS_PROFILES

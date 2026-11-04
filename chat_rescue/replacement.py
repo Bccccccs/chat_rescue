@@ -6,7 +6,7 @@ from pathlib import Path
 from . import operations as ops
 from .cipher import encrypt_database
 from .workflow import (connect, write_connect, ident, table_for, digest, private_json,
-                       plain_profile, WINDOWS_PROFILES, save_chat, prepare_plain_restore)
+                       plain_profile, WINDOWS_PROFILES, WINDOWS_PARTICIPANT_PROFILE, save_chat, prepare_plain_restore)
 from .shards import database_rels, message_rels, mutable_rels
 
 MODE = 'replace-a-from-b'
@@ -37,7 +37,7 @@ def replacement_base(exported, output, owner, peer):
     with write_connect(output / 'session/session.db') as c:
         old = c.execute('SELECT draft FROM SessionTable WHERE username=?', (peer,)).fetchone()
         c.execute('DELETE FROM SessionTable WHERE username=?', (peer,))
-    private_json(output / 'direction-profile.json', {'version': 1, 'direction_profile': plain_profile(exported)})
+    private_json(output / 'direction-profile.json', {'version': 1, 'direction_profile': WINDOWS_PARTICIPANT_PROFILE})
     return removed, old[0] if old else ''
 
 
@@ -69,7 +69,8 @@ def make_replace_plan(a, b, output):
             if row is None:
                 raise ValueError('无法核对本次账号身份')
             nicknames[slot] = row[0] or '昵称未设置'
-    source = save_chat(output / 'B-plain', b['owner'], a['owner'], output / 'B-chat', exclude_system_messages=True)
+    source = save_chat(output / 'B-plain', b['owner'], a['owner'], output / 'B-chat',
+                       exclude_system_messages=True, participant_identity_layout=True)
     removed, draft = replacement_base(output / 'A-plain', output / 'replacement-base', a['owner'], b['owner'])
     directory = ops.fresh(output / 'A-plan')
     result = prepare_plain_restore(output / 'B-chat', output / 'replacement-base', a['owner'], directory / 'recovered-plain')
