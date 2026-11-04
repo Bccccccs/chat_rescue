@@ -1,5 +1,6 @@
 """Sparse shard-local sender/recipient references, never fixed direction numbers."""
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -43,6 +44,7 @@ class ParticipantTests(unittest.TestCase):
         with db(self.root/'restored/message/message_0.db') as c:
             self.assertEqual(c.execute('SELECT status FROM '+table_for(B)+' ORDER BY server_id').fetchall(),[(2,),(3,)])
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows multi-shard participant mapping; Mac remains single-shard')
     def test_multishard_15_sender_and_recipient_values_deduplicate_by_identity(self):
         extra=self.source/'message/message_2.db';shutil.copy2(self.source/'message/message_0.db',extra)
         with db(extra) as c:
