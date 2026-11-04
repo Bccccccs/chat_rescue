@@ -1,5 +1,8 @@
 # Mac 安装与跨电脑使用
 
+本文对应 **Mac 0.5.0（Apple Silicon）** 的已发布实验安装包。[完整平台与版本对照](releases/README.md)。
+
+
 ## 在另一台 Mac 安装
 
 1. 确认是 Apple 芯片 M 系列、macOS 14 或以上。本机实测 macOS 27.0；Intel Mac 不适用此 arm64 包。

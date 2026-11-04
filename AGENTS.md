@@ -2,6 +2,8 @@
 
 ## 适用任务
 
+当前下载：Mac 0.5.0、Windows 0.5.1，均为实验预发布。源码 main 为0.5.1，不表示已发布同号Mac包；完整对照见[发布版本说明](docs/releases/README.md)。
+
 Windows 原生五步界面已有本机构建，入口与限制见 [Windows 桌面向导](docs/windows-desktop.md)。桌面开发/界面检查只操作本工具，不能顺带启动微信或取钥；实际恢复需按用户授权在界面核对账号、确认具体候选。私有账号设置只保存路径，重新打开仍需本人确认身份与应用计划。隔离测试报告不得作为真实应用计划。
 
 Windows 开发版补充：恢复执行先读 [Windows 离线说明](docs/windows.md)。Windows 使用已有授权密钥与兼容四库，不运行 Mac 的 prepare-key-app/capture-keys；用 init-work 创建 ACL 私有目录、verify-keys 验证全部消息分片及辅助库。支持 CLI 单向 bundle 交换及同机 plan-sync/apply-sync/undo-sync；4.2.0.12 已有四库取钥、导出和文本方向证据，真实 GUI 恢复应用、客户端显示与手机迁移仍未验收。Windows 向导先 A 核验并正常退出，再 B；首次使用可指定新的独立工作目录，不借用旧实验的昵称或密钥。下面的 Mac 取钥人工作业只适用于 Mac；账号核对、具体计划确认、备份及失败回执规则跨平台保留。
@@ -12,7 +14,7 @@ Windows 4.2.0.x x64 实验取钥补充：仅在用户明确要求实际取钥时
 
 恢复任务先阅读 [双账号恢复 SOP](docs/recovery-sop.md)、[命令说明](docs/cli.md)、[隐私规则](docs/privacy.md)、[失败处理](docs/troubleshooting.md)和[证据与边界](docs/evidence-and-support.md)。本文是 agent 的执行提示词，具体 CLI 参数与能力以源码、`--help` 和上述文档为准；不要臆造命令或输出。
 
-本地开发版 0.4.0 增加显式 Mac 原语音离线实验模式，执行前读 [语音实验说明](docs/voice-recovery.md) 与 [实现记录](docs/voice-recovery-progress.md)。基础模式仍按下文四库/三类型执行；语音模式使用五库、v2 bundle/计划及固定媒体路径白名单。已有媒体密钥可复用；缺失时取钥完成条件须包含媒体库，禁止四库提前完成。可读 v1 基础 bundle，v2 不得交由旧版处理。未知状态/方向/索引、多行、缺媒体或冲突停止；设计稿不代替实机播放证据。代码开发不得启动微信或应用真实聊天库。
+0.4.0 开发阶段增加显式 Mac 原语音离线实验模式（未单独发布，已并入 Mac 0.5.0），执行前读 [语音实验说明](docs/voice-recovery.md) 与 [实现记录](docs/voice-recovery-progress.md)。基础模式仍按下文四库/三类型执行；语音模式使用五库、v2 bundle/计划及固定媒体路径白名单。已有媒体密钥可复用；缺失时取钥完成条件须包含媒体库，禁止四库提前完成。可读 v1 基础 bundle，v2 不得交由旧版处理。未知状态/方向/索引、多行、缺媒体或冲突停止；设计稿不代替实机播放证据。代码开发不得启动微信或应用真实聊天库。
 
 Mac 0.5.0媒体实验版的原语音与图片、视频、文件附件实验模式，须读[语音说明](docs/voice-recovery.md)、[附件说明](docs/attachment-recovery.md)和[附件实现记录](docs/attachment-recovery-progress.md)。语音模式增加media_0.db；附件模式使用v3 bundle/计划，文件依赖、候选、原件、日志、应用/失败回撤/撤回须一并校验。DAT无目标可验证样本、缺主要内容、未知格式或冲突停止。Mac全部分片只读检查不代表多分片恢复支持。开发不得启动微信或修改真实库；用户确认的是已生成的具体应用计划。
 

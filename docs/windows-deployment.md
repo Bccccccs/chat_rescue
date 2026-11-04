@@ -1,5 +1,8 @@
 # Windows 安装包与跨电脑部署
 
+本文对应 **Windows 0.5.1（x64）** 的已发布实验安装包。[完整平台与版本对照](releases/README.md)。
+
+
 0.5.1 提供 Windows x64 安装包和便携 ZIP。Python 3.14.10、SQLCipher 4.5.2 community DLL、后端源码及第三方许可一起打包，使用安装目录内的相对路径。使用者不需要安装 Python、配置 SQLCipher、修改 PATH 或保留开发者的源码目录。
 
 ## 新电脑使用
