@@ -79,7 +79,7 @@ def compile_shell(payload):
     command += ['/reference:System.Windows.Forms.dll']
     command += ['/reference:' + str(framework / 'WPF' / name) for name in
                 ('PresentationFramework.dll', 'PresentationCore.dll', 'WindowsBase.dll')]
-    command += [str(ROOT / 'desktop/windows' / name) for name in ('ChatRescue.cs', 'BackendTransport.cs')]
+    command += [str(ROOT / 'desktop/windows' / name) for name in ('ChatRescue.cs', 'BackendTransport.cs', 'SourceImportFlow.cs')]
     subprocess.run(command, check=True)
 
 
@@ -137,7 +137,7 @@ def main():
         '已内置 Python 和 SQLCipher，无需安装 Python、修改 PATH 或下载项目源码。\n'
         '需要 Windows 10（19041及以上）/ Windows 11 x64、系统 .NET Framework 4.8及以上。\n'
         '请自行安装腾讯原版微信并由本人登录；当前仅核验微信4.2.0.12文本方向。\n'
-        '先登录 A（希望补回记录），读取核验并正常退出微信，再处理 B（仍保留记录）。\n'
+        '先登录 A（希望补回记录），读取核验并正常退出微信，再登录 B（仍保留记录），从手机 B 导入与 A 的聊天，电脑 B 已完整存在则直接核对，再勾选确认并读取 B。\n'
         '核对双方身份和具体恢复预览后才能应用。\n'
         '密钥、任务和原件保存在本人 LocalAppData/ChatRescue/Desktop 私有目录。\n'
         '卸载仅移除安装的程序文件，保留上述资料及微信记录。\n'

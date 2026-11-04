@@ -7,6 +7,9 @@ struct LoginFlow {
     var historyConfirmed = false
     var slot: String { stage == .a ? "A" : "B" }
     var complete: Bool { stage == .complete }
+    var importReminder: String {
+        stage == .b ? "现在请从手机 B，把 B 与 A 的聊天记录导入电脑上的微信 B。电脑 B 已有完整记录时，核对即可；完成导入并检查后再继续读取。" : ""
+    }
     var canConfirm: Bool {
         !complete && opened.contains(slot) && identityConfirmed && (stage == .a || historyConfirmed)
     }

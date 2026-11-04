@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import shutil
@@ -36,10 +37,11 @@ def outgoing_flag(profile):
     return 3 if direction_profile(profile) in WINDOWS_PROFILES else 1
 
 
-def check_profile_type(local_type, *profiles):
+def check_profile_type(local_type, *profiles, include_voice=False, include_attachments=False):
     if type(local_type) is not int or not 0 < local_type < (1 << 63):
         raise ValueError('invalid message type')
-    if LEGACY_PROFILE in profiles and local_type not in SUPPORTED:
+    allowed = SUPPORTED | ({34} if include_voice else set()) | ({3,43} if include_attachments else set())
+    if LEGACY_PROFILE in profiles and local_type not in allowed:
         raise ValueError('unsupported message type: ' + str(local_type))
     if WINDOWS_TEXT_PROFILE in profiles and local_type != 1:
         raise ValueError('Windows 4.2.0.12 currently supports verified text directions only')
@@ -174,8 +176,10 @@ def flip_packed(data, old_sender, new_sender, outgoing, *, source_outgoing=1, ta
 
 
 def _single_shard(root):
-    # Compatibility for callers; every numbered shard is now part of the scope.
-    return message_rels(root)
+    shards = message_rels(root)
+    if len(shards) != 1:
+        raise ValueError('当前恢复写入仅支持单个 message_0.db；Mac 媒体与多分片写入尚未适配，请保留全部分片')
+    return shards
 
 
 def message_tables(c):
@@ -204,12 +208,14 @@ def message_hits(root, server_ids):
     return hits
 
 
-def save_chat(plain_root, owner, peer, output):
+def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_missing_voice=False, include_attachments=False, allow_missing_attachments=False, asset_root=None):
     os.umask(0o077)
     root, output = Path(plain_root), Path(output)
     if owner == peer or '@' in owner or '@' in peer:
         raise ValueError('only two different personal WeChat identities are supported')
     shards = message_rels(root)
+    if platform.system() == 'Darwin' or include_voice or include_attachments:
+        _single_shard(root)
     check_paths(root, database_rels(root))
     report_path = root / 'export-report.json'
     if report_path.exists():
@@ -217,7 +223,8 @@ def save_chat(plain_root, owner, peer, output):
         account = report.get('account_directory', '')
         if account != owner and not account.startswith(owner + '_'):
             raise ValueError('owner 与导出账号目录不匹配')
-        if set(report.get('exported', {})) != set(database_rels(root)):
+        expected = (*database_rels(root), *(('message/media_0.db',) if include_voice else ()))
+        if set(report.get('exported', {})) != set(expected):
             raise ValueError('导出数据库分片清单 inventory 不完整或改变')
         if any(digest(root / rel) != value for rel, value in report['exported'].items()):
             raise ValueError('导出数据库哈希改变')
@@ -247,7 +254,7 @@ def save_chat(plain_root, owner, peer, output):
                 sender = names.get(row['real_sender_id'])
                 if sender not in (owner, peer):
                     raise ValueError('message sender is outside the selected two parties')
-                check_profile_type(row['local_type'], profile)
+                check_profile_type(row['local_type'], profile, include_voice=include_voice, include_attachments=include_attachments)
                 sid = row['server_id']
                 if not isinstance(sid, int) or sid <= 0:
                     raise ValueError('a real positive server_id is required; no ID is fabricated')
@@ -269,6 +276,15 @@ def save_chat(plain_root, owner, peer, output):
     with connect(root / RELS[1]) as c:
         for m in messages:
             for row in c.execute('SELECT * FROM MessageResourceInfo WHERE message_svr_id=?', (m['fields']['server_id'],)):
+                if ((include_voice and m['fields']['local_type'] == 34) or
+                        (include_attachments and m['fields']['local_type'] in (3,43,(6<<32)|49))):
+                    chat = c.execute('SELECT user_name FROM ChatName2Id WHERE rowid=?', (row['chat_id'],)).fetchone()
+                    sender = c.execute('SELECT user_name FROM SenderName2Id WHERE rowid=?', (row['sender_id'],)).fetchone()
+                    if (not chat or chat[0] != peer or not sender or sender[0] != m['sender']
+                            or row['message_local_id'] != m['fields']['local_id']
+                            or row['message_create_time'] != m['fields']['create_time']
+                            or row['message_local_type'] != m['fields']['local_type']):
+                        raise ValueError('voice resource source identity collision')
                 chat = c.execute('SELECT user_name FROM ChatName2Id WHERE rowid=?', (row['chat_id'],)).fetchone()
                 if chat is None:
                     raise ValueError('source resource chat identity missing')
@@ -278,7 +294,7 @@ def save_chat(plain_root, owner, peer, output):
                 if sender is None or sender[0] != m['sender'] or row['message_local_type'] != m['fields']['local_type']:
                     raise ValueError('source resource sender/type conflicts with message')
                 resources.append({'info': dict(row), 'details': [dict(x) for x in c.execute(
-                    'SELECT * FROM MessageResourceDetail WHERE message_id=?', (row['message_id'],))]})
+                    'SELECT * FROM MessageResourceDetail WHERE message_id=? ORDER BY resource_id', (row['message_id'],))]})
     with connect(root / RELS[2]) as c:
         session = c.execute('SELECT * FROM SessionTable WHERE username=?', (peer,)).fetchone()
         if session is None:
@@ -287,8 +303,22 @@ def save_chat(plain_root, owner, peer, output):
     payload = {'version': 1, 'owner': owner, 'peer': peer, 'source_table': table, 'direction_profile': profile,
                'schema': schema, 'indexes': indexes, 'participants': participants, 'source_shards': source_shards,
                'messages': messages, 'resources': resources, 'session': dict(session)}
+    if include_voice:
+        from .voice import collect, CAPABILITY
+        if profile != LEGACY_PROFILE:
+            raise ValueError('语音实验模式仅适配 Mac 方向配置')
+        payload.update(version=2, capabilities=[CAPABILITY],
+                       voices=collect(root, peer, messages, output, allow_missing_voice))
+    if include_attachments:
+        from . import attachments as att
+        if profile != LEGACY_PROFILE:
+            raise ValueError('附件模式仅适配Mac方向配置')
+        asset_root = att.resolve_root(root, asset_root)
+        entries, originals = att.collect(root, asset_root, owner, peer, messages, output, allow_missing_attachments)
+        payload.update(version=3, capabilities=payload.get('capabilities', [])+[att.CAPABILITY],
+                       attachments=entries, attachment_originals=originals)
     private_json(output / 'conversation.json', pack(payload))
-    private_json(output / 'manifest.json', {'version': 1, 'sha256': digest(output / 'conversation.json'),
+    private_json(output / 'manifest.json', {'version': payload['version'], 'sha256': digest(output / 'conversation.json'),
                                           'message_count': len(messages)})
     return {'saved': len(messages), 'owner': owner, 'peer': peer}
 
@@ -305,17 +335,40 @@ def _insert(c, table, row):
                      + ') VALUES (' + ','.join('?' for _ in row) + ')', tuple(row.values())).lastrowid
 
 
-def prepare_plain_restore(bundle, target_root, target_owner, output):
+def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_voice=False, include_attachments=False, target_asset_root=None):
     os.umask(0o077)
     bundle, target_root, output = Path(bundle), Path(target_root), Path(output)
     manifest = json.loads((bundle / 'manifest.json').read_text(encoding='utf-8'))
-    if manifest.get('version') != 1 or digest(bundle / 'conversation.json') != manifest.get('sha256'):
+    if (manifest.get('version') not in ((1,2,3) if include_attachments and include_voice else (1,3) if include_attachments else (1,2) if include_voice else (1,))
+            or digest(bundle / 'conversation.json') != manifest.get('sha256')):
         raise ValueError('bundle version/hash mismatch')
     data = unpack(json.loads((bundle / 'conversation.json').read_text(encoding='utf-8')))
-    if data.get('version') != 1 or target_owner != data['peer']:
+    if data.get('version') != manifest['version'] or target_owner != data['peer']:
         raise ValueError('target owner must be the source conversation peer')
     source_profile = direction_profile(data.get('direction_profile', LEGACY_PROFILE))
     target_profile = plain_profile(target_root)
+    if data['version'] == 1 and source_profile == LEGACY_PROFILE and any(m['fields']['local_type'] == 34 for m in data['messages']):
+        raise ValueError('旧 bundle 不允许携带语音')
+    attachment_mode = include_attachments
+    attachment_plan, attachment_counts = None, {}
+    if data['version'] == 3:
+        from .voice import CAPABILITY as VOICE_CAP
+        from .attachments import CAPABILITY as ATTACH_CAP
+        expected = ([VOICE_CAP] if include_voice else [])+[ATTACH_CAP]
+        if data.get('capabilities') != expected:
+            raise ValueError('附件bundle能力与本次显式开关不一致')
+    voice_mode = include_voice
+    audios = {}
+    if voice_mode:
+        from .voice import CAPABILITY, MEDIA, single_media, read_entries
+        if ((data['version'] == 2 and data.get('capabilities') != [CAPABILITY])
+                or source_profile != LEGACY_PROFILE or target_profile != LEGACY_PROFILE):
+            raise ValueError('语音能力或方向配置不受支持')
+        single_media(target_root)
+        if data['version'] in (2,3):
+            audios = read_entries(bundle, data)
+    if platform.system() == 'Darwin' or include_voice or include_attachments:
+        _single_shard(target_root)
     shards = message_rels(target_root)
     check_paths(target_root, database_rels(target_root))
     peer = data['owner']
@@ -341,9 +394,21 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
         if users != {target_owner, peer}:
             raise ValueError('log into target account and sync/open the peer contact first')
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
-    for rel in database_rels(target_root):
+    write_rels = (*mutable_rels(target_root), *((MEDIA,) if voice_mode else ()))
+    for rel in (*write_rels, 'contact/contact.db'):
         (output / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(target_root / rel, output / rel)
+    if attachment_mode:
+        from . import attachments as att
+        if source_profile != LEGACY_PROFILE or target_profile != LEGACY_PROFILE:
+            raise ValueError('附件模式仅适配Mac方向配置')
+        if data['version'] != 3 and any(m['fields']['local_type'] in (3,43,(6<<32)|49) for m in data['messages']):
+            raise ValueError('旧bundle没有附件本体，请用附件模式重新导出')
+        target_asset_root = att.resolve_root(target_root, target_asset_root)
+        if data['version'] == 3:
+            attachment_plan, attachment_counts = att.prepare(bundle, data, target_root, target_asset_root, target_owner, output)
+        else:
+            attachment_plan = {'originals':{}, 'candidates':{}}
     table = table_for(peer)
     local_ids, added_ids, skipped, timestamp_variants = {}, set(), 0, 0
     with write_connect(output / destination) as c:
@@ -364,7 +429,7 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
                 c.execute(sql.replace(expected_source, table))
         for m in data['messages']:
             row = dict(m['fields'])
-            check_profile_type(row['local_type'], source_profile, target_profile)
+            check_profile_type(row['local_type'], source_profile, target_profile, include_voice=voice_mode, include_attachments=attachment_mode)
             if row['server_id'] <= 0 or m['sender'] not in (target_owner, peer):
                 raise ValueError('invalid message in bundle')
             outgoing = m['sender'] == target_owner
@@ -377,7 +442,9 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
                                                 target_outgoing=outgoing_flag(target_profile))
             # Nontext playback/download states are not text sent/read flags.
             # Like the upstream Mac media adapter, retain their original state.
-            if target_profile != WINDOWS_STRUCTURED_PROFILE or row['local_type'] == 1:
+            if ((target_profile != WINDOWS_STRUCTURED_PROFILE or row['local_type'] == 1)
+                    and not (voice_mode and row['local_type'] == 34)
+                    and not (attachment_mode and row['local_type'] in (3,43,(6<<32)|49))):
                 row['status'] = 2 if target_profile in WINDOWS_PROFILES and outgoing else 3
             hits = hits_by_id.get(row['server_id'], [])
             if hits:
@@ -398,6 +465,12 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
                         time_variant = True
                 timestamp_variants += int(time_variant)
                 chosen = next((hit for hit in hits if hit[0] == destination), hits[-1])
+                if voice_mode and row['local_type'] == 34:
+                    from .voice import message_state
+                    for _, _, existing, _ in hits:
+                        message_state(existing)
+                        if existing['packed_info_data'] != row['packed_info_data']:
+                            raise ValueError('voice direction metadata collision')
                 local_ids[row['server_id']] = chosen[2]['local_id']
                 skipped += 1
                 continue
@@ -421,12 +494,17 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
             with write_connect(output / rel) as c:
                 c.execute('DELETE FROM DeleteInfo WHERE chat_name_id=? OR delete_table_name=?',
                           (mapping[0] if mapping else None, table))
+    attachment_resource_repaired = 0
     with write_connect(output / RELS[1]) as c:
+        c.row_factory = sqlite3.Row
+        voice_ids = set(audios)
+        attachment_ids = {e['server_id'] for e in data.get('attachments',[]) if e['files']} if attachment_mode else set()
         senders = {m['fields']['server_id']: m['sender'] for m in data['messages']}
+        source_messages = {m['fields']['server_id']: m['fields'] for m in data['messages']}
         for resource in data['resources']:
             info = dict(resource['info'])
             sid = info['message_svr_id']
-            if sid not in added_ids:
+            if sid not in added_ids and sid not in voice_ids and sid not in attachment_ids:
                 continue
             sender = senders[sid]
             existing_chats = c.execute(
@@ -435,6 +513,29 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
                 'WHERE resource.message_svr_id=?', (sid,)).fetchall()
             # Resource caches can share a server ID across conversations. Keep
             # foreign caches intact, but reject ambiguous or same-chat entries.
+            source_message = source_messages[sid]
+            if sid in voice_ids and (info['message_local_id'] != source_message['local_id']
+                    or info['message_create_time'] != source_message['create_time']
+                    or info['message_local_type'] != 34):
+                raise ValueError('voice resource association collision')
+            if sid in attachment_ids and existing_chats:
+                from .attachments import merge_resource
+                repairs = merge_resource(c, resource, peer, sender, local_ids[sid])
+                if repairs is not None:
+                    attachment_resource_repaired += repairs
+                    continue
+            if sid in voice_ids and existing_chats:
+                same = c.execute('SELECT r.* FROM MessageResourceInfo r JOIN ChatName2Id ch ON ch.rowid=r.chat_id WHERE r.message_svr_id=? AND ch.user_name=?', (sid, peer)).fetchall()
+                if len(same) == 1:
+                    existing = dict(same[0])
+                    expected = dict(info)
+                    expected.update(message_id=existing['message_id'], chat_id=existing['chat_id'], sender_id=existing['sender_id'], message_local_id=local_ids[sid])
+                    actor = c.execute('SELECT user_name FROM SenderName2Id WHERE rowid=?', (existing['sender_id'],)).fetchone()
+                    details = [dict(r) for r in c.execute('SELECT * FROM MessageResourceDetail WHERE message_id=? ORDER BY resource_id', (existing['message_id'],))]
+                    clean = lambda d: {k:v for k,v in d.items() if k not in ('resource_id','message_id')}
+                    if expected != existing or not actor or actor[0] != sender or [clean(d) for d in details] != [clean(d) for d in resource['details']]:
+                        raise ValueError('voice resource metadata collision')
+                    continue
             if any(not row[0] or row[0] == peer for row in existing_chats):
                 raise ValueError('existing resource identity collision')
             info.pop('message_id')
@@ -451,7 +552,7 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
     with write_connect(output / RELS[2]) as c:
         c.row_factory = sqlite3.Row
         existing = c.execute('SELECT * FROM SessionTable WHERE username=?', (peer,)).fetchone()
-        if data['messages']:
+        if data['messages'] and (added_ids or not (voice_mode or attachment_mode)):
             latest = max(data['messages'], key=lambda m: (m['fields']['sort_seq'], m['fields']['local_id']))
             # Do not replace a newer existing session preview with older history.
             if existing is None or (existing['last_timestamp'] or 0) <= latest['fields']['create_time']:
@@ -473,7 +574,11 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
             _mapping(c, 'Name2Id', peer)
             c.execute('DELETE FROM SessionDeleteTable WHERE username=?', (peer,))
         c.commit()
-    for rel in mutable_rels(output):
+    voice_counts = {}
+    if voice_mode:
+        from .voice import restore
+        voice_counts = restore(output, peer, data['messages'], local_ids, added_ids, audios)
+    for rel in write_rels:
         with connect(output / rel) as c:
             if [tuple(r) for r in c.execute('PRAGMA integrity_check')] != [('ok',)]:
                 raise ValueError('candidate database integrity check failed')
@@ -483,4 +588,6 @@ def prepare_plain_restore(bundle, target_root, target_owner, output):
             'source_direction_profile': source_profile, 'target_direction_profile': target_profile,
             'source_message_shards': data.get('source_shards', ['message/message_0.db']),
             'target_message_shard': destination, 'target_message_shards': list(shards),
-            'own_sender_id': own_id, 'peer_sender_id': peer_id, 'attachments_restored': False}
+            'own_sender_id': own_id, 'peer_sender_id': peer_id, 'attachments_restored': attachment_mode,
+            **attachment_counts, **({'assets':attachment_plan, 'attachment_peer':peer, 'attachment_resources_repaired':attachment_resource_repaired} if attachment_mode else {}),
+            **voice_counts, 'changed_databases': [r for r in write_rels if digest(output / r) != digest(target_root / r)]}

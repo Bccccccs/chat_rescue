@@ -28,7 +28,7 @@ from chat_rescue import __version__
 from pathlib import Path
 info={'CFBundleExecutable':'ChatRescue','CFBundleIdentifier':'local.chat-rescue.desktop',
       'CFBundleName':'Chat Rescue','CFBundleDisplayName':'Chat Rescue',
-      'CFBundleShortVersionString':__version__,'CFBundleVersion':'11','CFBundlePackageType':'APPL',
+      'CFBundleShortVersionString':__version__,'CFBundleVersion':'13','CFBundlePackageType':'APPL',
       'LSMinimumSystemVersion':'14.0','NSHighResolutionCapable':True,
       'NSHumanReadableCopyright':'Chat Rescue contributors · MIT',
       'NSPrincipalClass':'NSApplication','CFBundleIconFile':'AppIcon.icns'}

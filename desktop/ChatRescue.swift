@@ -25,6 +25,8 @@ struct Settings: Codable, Equatable {
     @Published var step = 0
     @Published var login = LoginFlow()
     @Published var busy = false
+    @Published var includeVoice = false
+    @Published var includeAttachments = false
     @Published var reading = false
     @Published var closing = false
     @Published var message = "软件会自动检查准备状态。首次使用只需完成系统授权和微信登录。"
@@ -34,6 +36,7 @@ struct Settings: Codable, Equatable {
     @Published var copies: [String: [String: Any]] = [:]
     @Published var chats: [String: [Conversation]] = [:]
     @Published var verified: Set<String> = []
+    @Published var messageShards: [String: [String]] = [:]
     @Published var names: [String: String] = [:]
     @Published var plan = ""
     @Published var preview: [String: [String: Any]] = [:]
@@ -80,7 +83,7 @@ struct Settings: Codable, Equatable {
     }
     func accountChanged(_ slot: String) {
         if !reading && login.complete { login = LoginFlow() }
-        verified.remove(slot); chats[slot] = nil
+        verified.remove(slot); chats[slot] = nil; messageShards[slot] = nil
         if !reading { names[slot] = nil }
         if !attempted { plan = ""; preview = [:]; planNames = [:] }
         save()
@@ -177,7 +180,9 @@ struct Settings: Codable, Equatable {
                let pid = launched[last]?["pid"] as? Int {
                 self.login.didOpen(last)
                 NSRunningApplication(processIdentifier: pid_t(pid))?.activate()
-                self.message = "微信 \(last) 已打开。请在微信里核对账号，再回到这里勾选确认。"
+                self.message = last == "B" && !self.applied
+                    ? "微信 B 已打开。登录保留记录的账号后，\(self.login.importReminder)"
+                    : "微信 \(last) 已打开。请在微信里核对账号，再回到这里勾选确认。"
             }
             self.refresh(light: true)
         }
@@ -186,9 +191,9 @@ struct Settings: Codable, Equatable {
         guard !locked, login.advance() else { return }
         if login.complete {
             step = 2
-            message = "登录检查完成。点击“开始读取并生成预览”；如再次弹出微信，按提示登录当前账号。"
+            message = "B 的电脑记录已由你确认。现在开始读取、备份并生成预览；如再次弹出微信，按提示登录当前账号。"
         } else {
-            message = "A 已由你确认。现在打开微信 B，登录保留记录的账号，检查旧聊天。"
+            message = "A 已由你确认。现在登录微信 B，并把手机 B 中与 A 的聊天导入电脑 B。"
             launch(["B"])
         }
     }
@@ -214,12 +219,16 @@ struct Settings: Codable, Equatable {
     func readBoth() {
         guard !locked else { return }
         guard login.complete else { step = 1; return }
-        step = 2; verified = []; captureChoices = []; reading = true
+        step = 2; verified = []; messageShards = [:]; captureChoices = []; reading = true
         withClosed { self.readQueue = ["A", "B"]; self.nextRead() }
     }
     func nextRead() {
         guard let slot = readQueue.first else {
             reading = false
+            if ["A", "B"].contains(where: { (messageShards[$0]?.count ?? 0) > 1 }) {
+                message = "双方消息分片已全部读取并检查。检测到多个消息分片，当前恢复写入尚未适配，已停止生成预览；原记录未修改。"
+                return
+            }
             if settings.a.owner == settings.b.owner { fail("两个窗口对应同一个账号。请在第二个微信窗口切换为另一位参与者的账号，再重新读取。"); return }
             if pair.isEmpty { message = "双方本地没有找到彼此的聊天。请先在微信中把需要的记录迁移到电脑，再重新读取。"; return }
             if pair.contains(where: { $0.unsupported > 0 }) { fail("所选聊天含当前版本不支持的消息类型，已停止补齐并保留原记录。"); return }
@@ -228,7 +237,7 @@ struct Settings: Codable, Equatable {
         readingSlot = slot; let account = slot == "A" ? settings.a : settings.b
         message = "正在处理微信 \(slot)。软件会识别真实昵称、读取会话并自动继续下一步。"
         if !account.keys.isEmpty && FileManager.default.fileExists(atPath: account.keys) { inspect(slot); return }
-        call(["action": "capture", "slot": slot, "original": settings.original, "account": account.request]) { result in self.captureRequest = result["request"] as? String ?? "" }
+        call(["action": "capture", "slot": slot, "original": settings.original, "account": account.request, "include_voice": includeVoice, "include_attachments": includeAttachments]) { result in self.captureRequest = result["request"] as? String ?? "" }
     }
     func acceptCapture(_ choice: [String: String]) {
         captureChoices = []
@@ -238,7 +247,12 @@ struct Settings: Codable, Equatable {
     }
     func inspect(_ slot: String) {
         let account = slot == "A" ? settings.a : settings.b
-        call(["action": "inspect", "account": account.request]) { result in
+        call(["action": "inspect", "account": account.request, "include_voice": includeVoice, "include_attachments": includeAttachments]) { result in
+            self.messageShards[slot] = result["message_shards"] as? [String] ?? []
+            if result["requires_voice_keys"] as? Bool == true || result["requires_message_keys"] as? Bool == true {
+                self.call(["action": "capture", "slot": slot, "original": self.settings.original, "account": account.request, "include_voice": self.includeVoice, "include_attachments": self.includeAttachments]) { captured in self.captureRequest = captured["request"] as? String ?? "" }
+                return
+            }
             guard let owner = result["owner"] as? [String: Any] else { self.fail("未能核验账号本人身份"); return }
             let nick = owner["nick_name"] as? String ?? ""
             self.names[slot] = nick.isEmpty ? "微信账号 \(slot)（昵称未设置）" : nick
@@ -252,7 +266,7 @@ struct Settings: Codable, Equatable {
     }
     func createPlan() {
         message = "昵称与会话已读取，正在自动备份并生成双向预览。"
-        call(["action": "plan", "a": settings.a.request, "b": settings.b.request]) { result in
+        call(["action": "plan", "a": settings.a.request, "b": settings.b.request, "include_voice": includeVoice, "include_attachments": includeAttachments]) { result in
             self.plan = result["plan"] as? String ?? ""; self.preview = result["directions"] as? [String: [String: Any]] ?? [:]
             self.planNames = ["A": self.name("A"), "B": self.name("B")]; self.applied = false; self.attempted = false; self.step = 3
             self.message = "预览已生成。请确认下面是双方真实昵称，并核对新增数量；确认前不会写入聊天库。"
@@ -468,7 +482,7 @@ struct ContentView: View {
                     HStack(spacing: 12) {
                         Label("1. 登录并确认 A", systemImage: model.login.stage == .a ? "circle.fill" : "checkmark.circle.fill")
                         Image(systemName: "chevron.right")
-                        Label("2. 登录并检查 B", systemImage: model.login.complete ? "checkmark.circle.fill" : "circle")
+                        Label("2. 登录 B 并导入旧聊天", systemImage: model.login.complete ? "checkmark.circle.fill" : "circle")
                         Image(systemName: "chevron.right")
                         Text("3. 读取聊天")
                     }.font(.caption).foregroundStyle(Palette.blue)
@@ -478,17 +492,23 @@ struct ContentView: View {
                         Button("下一步：读取聊天") { model.step = 2 }.buttonStyle(PrimaryStyle()).disabled(model.locked)
                     } else {
                         let slot = model.login.slot
-                        Text(slot == "A" ? "先登录 A：希望找回记录的账号" : "再登录 B：仍保留旧聊天的账号").font(.title2.bold())
+                        Text(slot == "A" ? "先登录 A：希望找回记录的账号" : "登录 B 后，现在从手机导入聊天").font(.title2.bold())
                         Instruction(number: "1", title: "打开微信 \(slot)，完成登录", detail: "点击下方按钮；已有账号时点“进入微信”，否则扫码并在手机确认。看清头像和昵称，确保是当前这一步的人。终端弹出时先保留，无需输入命令。")
                         Button("打开微信 \(slot)") { model.launch([slot]) }.buttonStyle(.bordered).disabled(model.locked || !model.prepared)
-                        Instruction(number: "2", title: slot == "A" ? "在 A 里确认 B 的联系人" : "在 B 里找到与 A 的旧聊天", detail: slot == "A" ? "A 是误删记录的人。确认已进入自己的账号，能找到 B 的联系人即可；不要求误删的旧消息已出现。" : "B 必须与 A 不同。打开与 A 的会话，向前翻到想恢复的日期，实际看到几条旧消息。若只有手机里有，先用微信迁移到这个 B 副本，再检查。")
+                        if slot == "A" {
+                            Instruction(number: "2", title: "在 A 里确认 B 的联系人", detail: "A 是误删记录的人。确认已进入自己的账号，能找到 B 的联系人即可；不要求误删的旧消息已出现。")
+                        } else {
+                            Text(model.login.importReminder).font(.headline).foregroundStyle(Palette.blue)
+                            Instruction(number: "2", title: "现在从手机 B 导入到电脑 B", detail: "在微信自己的手机到电脑迁移入口，选择 B 与 A 的会话和需要恢复的日期，接收方选当前电脑的微信 B 副本，等待导入完成。电脑 B 已有完整记录时，直接检查即可。")
+                            Instruction(number: "3", title: "导入完成后，在电脑 B 检查内容", detail: "打开 B 与 A 的会话，向前翻到想恢复的日期，确认旧文字已出现；需要图片、语音、视频或文件时，点开检查本地内容。请先完成这里，再继续读取。")
+                        }
                         Toggle(slot == "A" ? "我已在 A 窗口登录正确账号，并确认 B 的联系人" : "我已在 B 窗口登录另一位参与者的账号", isOn: $model.login.identityConfirmed)
                             .disabled(model.locked || !model.login.opened.contains(slot))
                         if slot == "B" {
-                            Toggle("我已在电脑的 B 窗口看到需要恢复的旧聊天", isOn: $model.login.historyConfirmed)
+                            Toggle("我已完成手机 B → 电脑 B 的导入或已有完整记录，并在电脑 B 检查了旧聊天及需要的媒体", isOn: $model.login.historyConfirmed)
                                 .disabled(model.locked || !model.login.opened.contains(slot))
                         }
-                        Button(slot == "A" ? "A 已确认，下一步打开 B" : "B 已检查，下一步读取聊天") { model.confirmLogin() }
+                        Button(slot == "A" ? "A 已确认，下一步打开 B" : "B 已导入并检查，下一步读取聊天") { model.confirmLogin() }
                             .buttonStyle(PrimaryStyle()).disabled(model.locked || !model.login.canConfirm)
                     }
                     Text("勾选表示你已人工检查。软件会在读取后核验真实昵称；窗口运行中不代表已登录，也不代表旧记录已迁入。").font(.caption).foregroundStyle(.secondary)
@@ -503,10 +523,17 @@ struct ContentView: View {
         VStack(spacing: 18) {
             Card {
                 VStack(alignment: .leading, spacing: 22) {
-                    Text(model.reading ? "软件正在继续处理" : "登录检查完成，现在读取聊天").font(.headline)
+                    Text(model.reading ? "软件正在继续处理" : "B 的聊天已导入并检查，现在读取电脑记录").font(.headline)
                     Instruction(number: "1", title: "正常退出两个微信副本", detail: "点击下方按钮后，软件会请求两个副本正常退出。若微信弹出退出确认框，请你确认；软件不会强制结束微信。原版若仍在运行，需要你正常退出。")
                     Instruction(number: "2", title: "首次读取时，在终端启动的微信里登录", detail: "软件会依次处理 A、B。终端弹出后，登录当前微信并完成手机确认；需要授权时按系统提示操作。无需复制命令或寻找密钥文件。")
-                    Instruction(number: "3", title: "等待昵称和预览自动出现", detail: "四个必要数据库验证完成后，软件识别本人昵称、读取聊天、备份并生成预览。两侧依次进行；这一步不会写入聊天库。")
+                    Instruction(number: "3", title: "等待昵称和预览自动出现", detail: "必要数据库验证完成后，软件识别本人昵称、读取聊天、备份并生成预览。两侧依次进行；这一步不会写入聊天库。")
+                    Toggle("同时恢复原语音（实验功能）", isOn: $model.includeVoice)
+                        .disabled(model.locked || model.attempted)
+                        .onChange(of: model.includeVoice) { _, _ in model.plan = ""; model.preview = [:]; model.verified = []; model.chats = [:] }
+                    Toggle("同时恢复图片、视频和文件附件（实验功能）", isOn: $model.includeAttachments)
+                        .disabled(model.locked || model.attempted)
+                        .onChange(of: model.includeAttachments) { _, _ in model.plan = ""; model.preview = [:]; model.verified = []; model.chats = [:] }
+                    Text("只恢复本地完整内容，缺失、冲突或未知结构会停止。加密图片需可核验的账号密钥来源；图片查看、视频播放、文件打开和手机迁移仍需验收。").font(.caption).foregroundStyle(.secondary)
                     if model.reading || model.closing { HStack { ProgressView().controlSize(.small); Text(model.closing ? "等待微信正常退出…" : "正在处理微信 \(model.readingSlot)，请关注终端和手机提示").foregroundStyle(Palette.blue) } }
                     Button(model.reading || model.closing ? "正在处理，请等待" : "开始读取并生成预览") { model.readBoth() }.buttonStyle(PrimaryStyle()).disabled(model.locked || !model.prepared || !model.login.complete)
                     if !model.captureChoices.isEmpty {
@@ -534,13 +561,19 @@ struct ContentView: View {
                         ForEach(["A", "B"], id: \.self) { slot in
                             let direction = model.preview[slot] ?? [:]
                             HStack { Text("补齐到 \(model.planNames[slot] ?? model.name(slot))").font(.system(size: 15, weight: .medium)); Spacer(); Text("新增 \(direction["added"] as? Int ?? 0) 条").foregroundStyle(Palette.blue); Text("已有重复 \(direction["skipped"] as? Int ?? 0) 条").foregroundStyle(.secondary) }
+                            if direction["image_added"] != nil {
+                                Text("图片：新增 \(direction["image_added"] as? Int ?? 0)，补附件 \(direction["image_repaired"] as? Int ?? 0)；视频：新增 \(direction["video_added"] as? Int ?? 0)，补附件 \(direction["video_repaired"] as? Int ?? 0)；文件：新增 \(direction["file_added"] as? Int ?? 0)，补附件 \(direction["file_repaired"] as? Int ?? 0)").font(.caption).foregroundStyle(.secondary)
+                            }
+                            if direction["voice_added"] != nil {
+                                Text("语音：新增音频 \(direction["voice_added"] as? Int ?? 0) 条，已有消息补音频 \(direction["voice_repaired"] as? Int ?? 0) 条，音频已完整 \(direction["voice_skipped"] as? Int ?? 0) 条，阻碍 \(direction["voice_blocked"] as? Int ?? 0) 条").font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                         Text("已有消息保留，重复消息跳过。冲突或不支持的内容会停止处理。确认后才写入；原件和回执保存在本机。").font(.caption).foregroundStyle(.secondary)
                         HStack { Button("昵称与数量正确，确认补齐") { confirmApply = true }.buttonStyle(PrimaryStyle()).disabled(model.locked || model.attempted); Button("查看备份与回执") { NSWorkspace.shared.open(URL(fileURLWithPath: model.plan)) }.buttonStyle(.bordered) }
                     }
                 }
             }
-            Text("当前支持文本、名片和文件消息条目；附件本体不恢复。手机结果需通过微信自己的迁移入口另行验收。").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+            Text("默认恢复文本、名片和文件消息条目；语音及图片、视频、文件附件需开启对应实验功能。手机迁移与实际打开仍需单独验收。").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
     func nicknameBlock(_ slot: String) -> some View {
@@ -550,7 +583,7 @@ struct ContentView: View {
         Card {
             VStack(alignment: .leading, spacing: 24) {
                 Label(model.applied ? "数据库补齐已完成" : "这里显示补齐后的验收步骤", systemImage: model.applied ? "checkmark.circle.fill" : "checklist").font(.system(size: 22, weight: .semibold)).foregroundStyle(Palette.teal)
-                Instruction(number: "1", title: "打开两个微信，找到双方聊天", detail: "确认原有消息仍在，新增记录的时间、内容、头像和发送/接收方向正确。数据库验证不能代替你检查实际显示。")
+                Instruction(number: "1", title: "打开两个微信，找到双方聊天", detail: "确认原有消息仍在，新增记录的时间、内容、头像和发送/接收方向正确。启用媒体功能后，请打开大图、完整播放语音和视频，并检查文件内容；重启微信后再次检查。数据库验证不能代替实际验收。")
                 Instruction(number: "2", title: "需要手机记录时，使用微信自己的迁移功能", detail: "由本人在电脑微信和手机上完成迁移，并重新核对内容和方向。软件不会自动同步到微信服务器。")
                 HStack { Button("打开微信 A 检查") { model.launch(["A"]) }.buttonStyle(PrimaryStyle()).disabled(model.locked || !model.prepared || !model.applied); Button("打开微信 B 检查") { model.launch(["B"]) }.buttonStyle(.bordered).disabled(model.locked || !model.prepared || !model.applied); if !model.plan.isEmpty { Button("查看备份") { NSWorkspace.shared.open(URL(fileURLWithPath: model.plan)) }.buttonStyle(.bordered) } }
                 if model.applied { Divider(); Text("需要撤回时，软件会先检查是否产生新消息。发现变化会拒绝撤回，保护新记录。").font(.caption).foregroundStyle(.secondary); Button("撤回本次补齐", role: .destructive) { confirmUndo = true }.disabled(model.locked) }

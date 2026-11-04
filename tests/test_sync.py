@@ -115,11 +115,11 @@ class PreflightTests(unittest.TestCase):
     def test_bilateral_failure_reports_first_side_not_full_success(self):
         # Complete the first real write, then fail before recording the unchanged side.
         real=sync.ops.state;failed=False
-        def fail_once(root):
+        def fail_once(root, *args, **kwargs):
             nonlocal failed
             if Path(root).resolve()==self.source[0].resolve() and (self.root/'sync/A-plan/applied.json').exists() and not failed:
                 failed=True;raise OSError('synthetic filesystem failure')
-            return real(root)
+            return real(root, *args, **kwargs)
         import json
         with patch('chat_rescue.operations.ensure_closed'):
             self.plan()

@@ -1,5 +1,9 @@
 # 命令说明
 
+本地开发版0.5.0提供可选Mac原语音和图片、视频、文件附件实验模式，新增文件规则见[附件实验说明](attachment-recovery.md)和[语音说明](voice-recovery.md)。已发布0.3.7下载包不包含这些改动；实际打开/播放和手机迁移尚未验收。下面未注明媒体的步骤仍指基础模式。
+
+Mac 本地开发版的取钥、`verify-keys`、`export-db` 和桌面聊天统计现覆盖全部 `message_N.db` 消息分片，必要库数量随分片增加；取钥回执保存每个账号的必要库清单。恢复 bundle 和恢复写入仍限单分片，多分片读取通过后会明确停止生成恢复预览。详见[分片检查记录](message-shards-progress.md)。Windows 不随本次修改扩大支持范围。
+
 所有命令在仓库根目录执行，无需 pip 安装：
 
 ```sh
@@ -45,7 +49,7 @@ python3.14 -m chat_rescue save-chat \
   --output "$WORK/chat"
 ```
 
-导出保留 `Name2Id` 等表的隐式 rowid，不修改原库。导出全部现有 `message/message_N.db` 编号分片（必须含 `message_0.db`），以及 `message/message_resource.db`、`session/session.db`、`contact/contact.db`；输出沿用这些相对路径，`_encrypted_snapshot/` 保留加密原件和存在的 WAL/SHM，`export-report.json` 绑定账号父目录、精确分片清单和所有导出库哈希。`save-chat` 校验该绑定，不接受任意拼装或改写的明文库。`--owner` 是源库所属账号 B 的内部 wxid，`--peer` 是 A 的内部 wxid。仅支持指定双方的单聊导出，不把整库当作分享产物。
+导出保留 `Name2Id` 等表的隐式 rowid，不修改原库。Mac 导出全部编号消息分片，以及 `message/message_resource.db`、`session/session.db`、`contact/contact.db`；Windows 仍限原来的四库。语音模式另需媒体库。输出沿用原相对路径，`_encrypted_snapshot/` 保留加密原件和存在的 WAL/SHM，`export-report.json` 绑定账号父目录、完整消息分片清单及逐文件哈希。`save-chat` 仍拒绝多消息分片，并校验报告绑定，不接受任意拼装或改写的明文库。`--owner` 是源库所属账号 B 的内部 wxid，`--peer` 是 A 的内部 wxid。仅支持指定双方的单聊 bundle，不把整库当作分享产物。
 
 bundle 包含原始消息字段、BLOB 的 base64 表示、参与者映射、会话摘要和资源元数据，不包含密钥。base64 是编码，不是加密。消息中的文件卡片、名片或资源路径不能证明附件内容完整，工具不自动下载附件。
 

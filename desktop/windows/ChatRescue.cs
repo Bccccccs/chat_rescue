@@ -65,7 +65,7 @@ public class Wizard : Window {
         var bottom=new StackPanel{Margin=new Thickness(23,20,15,25)};
         bottom.Children.Add(Link("一步一步使用指南",delegate { MessageBox.Show(this,"1. 检查环境并选择腾讯原版微信。\n2. 先打开 A，本人登录并读取核验。正常退出微信后再打开 B，登录后将手机 B 中与 A 的聊天导入电脑 B（已完整存在则直接核对），确认后读取 B。\n3. 两个账号核验完成、微信正常退出后生成预览。已有密钥可退出后直接读取验证。\n4. 核对昵称、数量、方向，确认后才应用。\n5. 在原版微信核对显示；手机迁移单独验收。\n\n遇到冲突或空白账号未初始化时停止，保留原件，不删除聊天。","使用指南"); }));
         bottom.Children.Add(Link("载入隔离测试报告",LoadSimulation));
-        bottom.Children.Add(Text("0.3.6 · Windows 实验版",11,muted));
+        bottom.Children.Add(Text("0.5.1 · Windows 实验版",11,muted));
         bottom.Children.Add(Link("开源许可",delegate{OpenDirectory(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"licenses"));}));DockPanel.SetDock(bottom,Dock.Bottom); side.Children.Add(bottom);
         nav=new StackPanel{Margin=new Thickness(12,0,12,0)}; side.Children.Add(nav);
         for(int i=0;i<5;i++){int index=i; steps[i]=Button((i+1)+"   "+titles[i],delegate{step=index;Render();});steps[i].HorizontalContentAlignment=HorizontalAlignment.Left;steps[i].Margin=new Thickness(0,0,0,10);steps[i].Padding=new Thickness(16,15,8,15); nav.Children.Add(steps[i]);}

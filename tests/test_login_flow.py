@@ -13,19 +13,21 @@ class LoginFlowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "main.swift").write_text('''var flow = LoginFlow()
-assert(flow.slot == "A" && !flow.canOpen("B"))
+assert(flow.slot == "A" && !flow.canOpen("B") && flow.importReminder.isEmpty)
 assert(!flow.advance())
 flow.identityConfirmed = true
 assert(!flow.advance()) // a checkbox cannot substitute for a successful launch
 flow.didOpen("A")
 assert(flow.advance())
 assert(flow.slot == "B" && flow.canOpen("B") && !flow.identityConfirmed)
+assert(flow.importReminder.contains("手机 B") && flow.importReminder.contains("微信 B"))
 assert(!flow.advance())
 flow.didOpen("B")
 flow.identityConfirmed = true
 assert(!flow.advance()) // B must actually have the old conversation on the computer
 flow.historyConfirmed = true
 assert(flow.advance() && flow.complete)
+assert(flow.importReminder.isEmpty) // no import instruction after the user checked B
 assert(!flow.advance())
 flow = LoginFlow() // a new session or changed account starts from A again
 assert(!flow.complete && !flow.canOpen("B") && flow.opened.isEmpty)

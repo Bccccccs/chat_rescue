@@ -1,13 +1,13 @@
 # Windows 安装包与跨电脑部署
 
-0.3.6 提供 Windows x64 安装包和便携 ZIP。Python 3.14.10、SQLCipher 4.5.2 community DLL、后端源码及第三方许可一起打包，使用安装目录内的相对路径。使用者不需要安装 Python、配置 SQLCipher、修改 PATH 或保留开发者的源码目录。
+0.5.1 提供 Windows x64 安装包和便携 ZIP。Python 3.14.10、SQLCipher 4.5.2 community DLL、后端源码及第三方许可一起打包，使用安装目录内的相对路径。使用者不需要安装 Python、配置 SQLCipher、修改 PATH 或保留开发者的源码目录。
 
 ## 新电脑使用
 
-1. 从项目 [0.3.6 Release](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.3.6) 下载 `Chat-Rescue-0.3.6-Windows-x64-Setup.exe`，可使用同页 `SHA256SUMS.txt` 核对文件。
+1. 从项目 [0.5.1 Release](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.1) 下载 `Chat-Rescue-0.5.1-Windows-x64-Setup.exe`，可使用同页 `SHA256SUMS.txt` 核对文件。
 2. 双击安装，默认仅安装到当前用户的 `%LOCALAPPDATA%\Programs\ChatRescue`，提供开始菜单和可选桌面快捷方式。需要 Windows 10 build 19041+ / Windows 11 x64，以及系统 .NET Framework 4.8+；安装器检测 .NET，缺失时显示官方安装/修复提示并停止，不静默提权。其他 Windows 版本、ARM64 和干净虚拟机的完整兼容性尚未验收。
 3. 启动 Chat Rescue，点击“自动检查并准备”。已安装的原版微信可通过系统信息发现，发现失败时由本人选择程序。微信本体、账号登录和手机确认由本人完成。
-4. 先打开 A（目标账号）并读取核验，正常退出微信后再打开 B（源账号）。核对当前目录与身份，双方读取成功且微信退出后生成预览。当前仅核验微信 **4.2.0.12 的文本方向**；不因安装成功就保证其他版本或消息类型可恢复。
+4. 先打开 A（目标账号）并读取核验，正常退出微信后再打开 B（源账号），从手机 B 导入与 A 的聊天（电脑 B 已有完整记录则直接核对），确认内容和时间范围后再读取 B。核对当前目录与身份，双方读取成功且微信退出后生成预览。当前仅核验微信 **4.2.0.12 的文本方向**；不因安装成功就保证其他版本或消息类型可恢复。
 5. 对本次具体预览确认后应用；电脑显示与手机迁移分别验收。详细步骤见 [桌面向导](windows-desktop.md)。
 
 运行依赖已经随包提供，安装后无需联网下载它们。下载发布文件需要网络，微信自身的登录与同步另有其网络需求。便携 ZIP 解压后运行 `ChatRescue.exe`，必须保留同目录的 `runtime`、`app`、`backend-config.json` 和许可文件，不能只复制 EXE。
@@ -32,7 +32,7 @@
 在 Windows x64 构建机安装 Python 3.14+ 与 Inno Setup 6.7.4。固定源码提交后，在仓库根目录执行：
 
 ```powershell
-py -3.14 desktop/windows/package.py --iscc 'C:\你的InnoSetup目录\ISCC.exe' --output 'dist\windows-release-0.3.6'
+py -3.14 desktop/windows/package.py --iscc 'C:\你的InnoSetup目录\ISCC.exe' --output 'dist\windows-release-0.5.1'
 ```
 
 构建器从官方 Python 和固定 NuGet 来源获取依赖并核对写在源码中的 SHA256；也接受 `--python-archive`、`--cipher-archive` 使用本地同哈希缓存。Inno Setup 从[官方页面](https://jrsoftware.org/isdl.php)取得并验证签名，仅作为构建工具，不安装到最终用户电脑。`--output` 必须是尚不存在的新目录，失败现场保留；`--allow-dirty` 仅供本地构建试验，公开发布使用已提交的干净源码。

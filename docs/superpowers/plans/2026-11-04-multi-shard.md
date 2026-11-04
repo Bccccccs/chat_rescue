@@ -64,3 +64,5 @@ Files: `operations.py`, `__main__.py`, `windows_capture.py`, `windows_backend.py
 - Windows B 导入提醒仅在 A 核验后显示，要求本人在读取 B 和生成计划前确认；更换账号/密钥或重新登录清除。实际 C# 状态机回归与 WPF 编译通过。
 
 - 最终验证：完整 153 项，143 通过、10 项 Mac/Swift 平台跳过；加密集成已实际运行。完整 WPF 编译、实际 C# 状态门槛及 git diff --check 通过。未提交、未推送，保留工作区供审查。
+
+- 后续发布授权：用户明确要求推送与发布；整合远端 f5153a1 的 Mac 媒体模块，保留 Mac 媒体单分片边界。发布版本 0.5.1，本机完整 218 项中 178 通过、40 平台跳过；正式打包壳编译通过。Windows 分片回归迁至 tests/test_windows_shards.py，待远端 CI 构建安装 EXE 与便携 ZIP。

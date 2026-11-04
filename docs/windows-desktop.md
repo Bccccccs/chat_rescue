@@ -6,7 +6,7 @@ Windows 本机开发版使用 WPF 原生窗口，沿用 Mac 版的侧栏、蓝�
 
 ## 构建并打开
 
-普通使用者请优先下载 [0.3.6 安装包](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.3.6)，已包含 Python、SQLCipher 和后端，不需要源码或下面的构建环境。[安装与跨电脑部署](windows-deployment.md) 介绍依赖、便携包和卸载后的资料保留。以下 `build.ps1` 仅用于开发者的本机构建。
+普通使用者请优先下载 [0.5.1 安装包](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.1)，已包含 Python、SQLCipher 和后端，不需要源码或下面的构建环境。[安装与跨电脑部署](windows-deployment.md) 介绍依赖、便携包和卸载后的资料保留。以下 `build.ps1` 仅用于开发者的本机构建。
 
 需要 Windows x64、系统 .NET Framework 4.x（含 WPF / C# 编译器）、Python 3.14 和匹配架构的 SQLCipher 4 DLL。无需安装 .NET SDK。替换下面路径，在仓库根目录的 PowerShell 执行：
 

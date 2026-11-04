@@ -17,15 +17,15 @@ def message_rels(root):
         match = MESSAGE_NAME.fullmatch(path.name)
         if match:
             if path.is_symlink() or not path.is_file():
-                raise ValueError('message shard must be a regular file')
+                raise ValueError('消息分片路径不受支持：message shard must be a regular file')
             names.append(path.name)
         elif re.fullmatch(r'message_[0-9]+\.db', path.name):
-            raise ValueError('noncanonical message shard filename')
+            raise ValueError('消息分片路径不受支持：noncanonical filename')
         elif (sidecar := SIDECAR_NAME.fullmatch(path.name)):
             if path.is_symlink() or not (directory / sidecar[1]).is_file():
-                raise ValueError('orphan or symbolic message shard sidecar')
+                raise ValueError('orphan 分片缺少数据库或使用符号链接')
     if 'message_0.db' not in names:
-        raise ValueError('missing required message/message_0.db')
+        raise ValueError('消息目录缺少 message_0.db')
     return tuple('message/' + name for name in sorted(names, key=lambda n: int(MESSAGE_NAME.fullmatch(n)[1])))
 
 
@@ -67,3 +67,7 @@ def receipt_covers(root, receipt):
     # Old receipts explicitly verified exactly the original four databases.
     return (len(rels) == 4 if recorded is None else
             isinstance(recorded, list) and len(recorded) == len(rels) and set(recorded) == set(rels))
+
+
+# Shared name used by the Mac inspection and media adapters.
+message_shards = message_rels
