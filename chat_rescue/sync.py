@@ -126,7 +126,7 @@ def apply_sync_plan(output):
         if (output/'sync-started.json').exists():
             raise ValueError('此计划已尝试应用，请查看回执；不要重复执行')
         manifest = json.loads((output/'sync-plan.json').read_text(encoding='utf-8'))
-        if manifest.get('version') not in (1,2,3) or set(manifest.get('accounts', {})) != {'A','B'}:
+        if manifest.get('version') not in (1,2,3,4) or set(manifest.get('accounts', {})) != {'A','B'}:
             raise ValueError('双向计划结构不受支持')
         voice_options = sync_options(manifest)
         a, b = manifest['accounts']['A'], manifest['accounts']['B']
@@ -147,7 +147,8 @@ def apply_sync_plan(output):
                 if plan['target_root'] != account['root'] or plan['target_owner'] != account['owner'] or plan['originals'] != manifest['originals'][slot]:
                     raise ValueError('单向计划与双向身份或快照不一致')
                 ops.plan_sets(plan)
-                if plan['version'] != manifest['version'] or (directory/'apply-started.json').exists():
+                expected_version = 1 if manifest.get('mode') == 'replace-a-from-b' else manifest['version']
+                if plan['version'] != expected_version or (directory/'apply-started.json').exists():
                     raise ValueError('单向计划不可应用')
                 for rel, value in plan['candidates'].items():
                     if digest(ops.protected_path(directory/'candidates', rel)) != value:
@@ -259,7 +260,7 @@ def undo_sync_plan(output):
 def sync_options(manifest):
     version=manifest.get('version');caps=manifest.get('capabilities',[])
     voice=version==2 or (version==3 and CAPABILITY in caps)
-    if (version not in (1,2,3)
+    if (version not in (1,2,3,4)
             or set(manifest.get('accounts', {}))!={'A','B'}
             or set(manifest.get('directions', {}))!={'A','B'}
             or set(manifest.get('originals', {}))!={'A','B'}
@@ -267,6 +268,13 @@ def sync_options(manifest):
             or (version==3 and caps!=([CAPABILITY] if voice else [])+[att.CAPABILITY])):
         raise ValueError('双向计划结构不受支持')
     a,b = manifest['accounts']['A'],manifest['accounts']['B']
+    if version == 4 or manifest.get('mode') == 'replace-a-from-b':
+        if (version != 4 or manifest.get('mode') != 'replace-a-from-b'
+                or caps != ['windows-single-chat-replacement']
+                or manifest['directions']['B']['plan'] is not None
+                or manifest['directions']['B'].get('added') != 0
+                or not manifest['directions']['A']['plan']):
+            raise ValueError('单向替换计划只允许写入 A，B 必须保持只读')
     if a['owner']==b['owner'] or Path(a['root']).resolve()==Path(b['root']).resolve():
         raise ValueError('双向计划必须使用两个不同账号')
     for slot,account in manifest['accounts'].items():

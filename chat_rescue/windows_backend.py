@@ -12,8 +12,9 @@ import uuid
 from . import __main__ as cli
 from .operations import ALL, check_owner, ensure_closed, fresh
 from .runtime import make_private, require_private
-from .workflow import connect, digest, private_json
+from .workflow import connect, digest, private_json, DirectionMismatch
 from .sync import make_sync_plan, apply_sync_plan, undo_sync_plan
+from .replacement import make_replace_plan
 from .windows_capture import app_info, capture
 from .vendor.sqlcipher_probe import DB, load_key
 from .cipher import literal
@@ -166,7 +167,8 @@ def account_nickname(selected, keys):
 def plan_view(directory):
     directory = Path(directory).resolve(strict=True)
     manifest = json.loads((directory / 'sync-plan.json').read_text(encoding='utf-8'))
-    if manifest.get('version') != 1 or set(manifest.get('accounts', {})) != {'A', 'B'}:
+    if (manifest.get('version') not in (1, 4) or set(manifest.get('accounts', {})) != {'A', 'B'}
+            or (manifest.get('version') == 4 and manifest.get('mode') != 'replace-a-from-b')):
         raise ValueError('这不是受支持的双向计划')
     receipt = directory / 'sync-result.json'
     state = json.loads(receipt.read_text(encoding='utf-8'))['state'] if receipt.exists() else 'ready'
@@ -181,7 +183,8 @@ def plan_view(directory):
         confirmation = json.loads(confirmed.read_text(encoding='utf-8'))
         client_confirmed = confirmation.get('state') == 'user_confirmed' and confirmation.get('plan_hash') == plan_hash and state == 'applied'
     return {'plan': str(directory), 'plan_hash': plan_hash, 'client_confirmed': client_confirmed,
-            'accounts': manifest['accounts'], 'directions': manifest['directions'], 'state': state}
+            'accounts': manifest['accounts'], 'directions': manifest['directions'], 'state': state,
+            'mode': manifest.get('mode', 'sync')}
 
 
 def guarded_plan(request):
@@ -250,7 +253,7 @@ def dispatch(request):
         for selected in (a, b):
             require_private(selected['keys'])
         directory = job() / 'sync'
-        make_sync_plan(a, b, directory)
+        make_replace_plan(a, b, directory)
         return plan_view(directory)
     if action == 'resume':
         return plan_view(request['plan'])
@@ -326,7 +329,11 @@ def main():
         response = {'ok': False, 'error': '本机界面与数据的字符编码不兼容，请更新桌面程序并保留任务目录；本次操作未完成。'}
     except (OSError, ValueError, RuntimeError, KeyError) as error:
         detail = str(error)
-        if 'packed direction is not the expected opposite perspective' in detail:
+        if isinstance(error, DirectionMismatch):
+            detail = (f'B→A 候选方向校验失败：实际值={error.actual}，预期值={error.expected}，'
+                      f'字段编码={error.wire}，类型={error.local_type}，配置={error.profile}。'
+                      '本次未应用；请保留任务，不修改消息字段。')
+        elif 'packed direction is not the expected opposite perspective' in detail:
             detail = '消息收发方向与所用方向配置不匹配，本次未应用。请核对密钥旁的同名 .capture.json 回执及旧导出配置；若回执完整，仍需检查消息方向兼容性。请保留任务目录。'
         elif 'Windows 4.2.0.12 currently supports verified text directions only' in detail:
             detail = 'Windows 4.2.0.12 当前仅核验了文本消息方向；所选会话含尚未验证的类型，本次未应用。'

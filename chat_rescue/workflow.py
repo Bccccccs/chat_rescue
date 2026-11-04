@@ -134,6 +134,14 @@ def readvar(data, pos):
     raise ValueError('invalid packed integer')
 
 
+class DirectionMismatch(ValueError):
+    def __init__(self, actual, expected, wire):
+        self.actual, self.expected, self.wire = actual, expected, wire
+        self.profile, self.local_type = None, None
+        super().__init__('packed direction is not the expected opposite perspective'
+                         f' (actual={actual}, expected={expected}, wire={wire})')
+
+
 def flip_packed(data, old_sender, new_sender, outgoing, *, source_outgoing=1, target_outgoing=1):
     if source_outgoing not in (1, 3) or target_outgoing not in (1, 3):
         raise ValueError('unsupported packed direction profile')
@@ -165,7 +173,7 @@ def flip_packed(data, old_sender, new_sender, outgoing, *, source_outgoing=1, ta
             wanted = target_outgoing if outgoing else 2
             expected = 2 if outgoing else source_outgoing
             if wire != 0 or value != expected:
-                raise ValueError('packed direction is not the expected opposite perspective')
+                raise DirectionMismatch(value, expected, wire)
             result.append(varint(tag) + varint(wanted))
             seen.append(2)
         else:
@@ -208,7 +216,7 @@ def message_hits(root, server_ids):
     return hits
 
 
-def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_missing_voice=False, include_attachments=False, allow_missing_attachments=False, asset_root=None):
+def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_missing_voice=False, include_attachments=False, allow_missing_attachments=False, asset_root=None, exclude_system_messages=False):
     os.umask(0o077)
     root, output = Path(plain_root), Path(output)
     if owner == peer or '@' in owner or '@' in peer:
@@ -229,6 +237,9 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
         if any(digest(root / rel) != value for rel, value in report['exported'].items()):
             raise ValueError('导出数据库哈希改变')
     profile = plain_profile(root)
+    if exclude_system_messages and profile != WINDOWS_STRUCTURED_PROFILE:
+        raise ValueError('单向重建需要配套 Windows structured 取钥回执，请保留原任务')
+    excluded_system = {}
     with connect(root / 'contact/contact.db') as c:
         participants = [dict(r) for r in c.execute('SELECT * FROM contact WHERE username IN (?,?)', (owner, peer))]
         if {r['username'] for r in participants} != {owner, peer}:
@@ -251,6 +262,12 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
             names = {r['rowid']: r['user_name'] for r in c.execute('SELECT rowid,user_name FROM Name2Id')}
             for raw in c.execute('SELECT * FROM ' + ident(table) + ' ORDER BY sort_seq,local_id'):
                 row = dict(raw)
+                # Explicitly deferred types in the single-conversation rebuild mode.
+                # Never treat an arbitrary direction/identity error as a system row.
+                if exclude_system_messages and row['local_type'] in (10000, 10002):
+                    kind = str(row['local_type'])
+                    excluded_system[kind] = excluded_system.get(kind, 0) + 1
+                    continue
                 sender = names.get(row['real_sender_id'])
                 if sender not in (owner, peer):
                     raise ValueError('message sender is outside the selected two parties')
@@ -259,9 +276,13 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
                 if not isinstance(sid, int) or sid <= 0:
                     raise ValueError('a real positive server_id is required; no ID is fabricated')
                 canonical = {k: v for k, v in row.items() if k not in ('local_id', 'real_sender_id')}
-                canonical['packed_info_data'] = flip_packed(
-                    row['packed_info_data'], row['real_sender_id'], 1, sender == peer,
-                    source_outgoing=outgoing_flag(profile), target_outgoing=outgoing_flag(profile))
+                try:
+                    canonical['packed_info_data'] = flip_packed(
+                        row['packed_info_data'], row['real_sender_id'], 1, sender == peer,
+                        source_outgoing=outgoing_flag(profile), target_outgoing=outgoing_flag(profile))
+                except DirectionMismatch as error:
+                    error.profile, error.local_type = profile, row['local_type']
+                    raise
                 canonical['sender'] = sender
                 if sid in unique:
                     if unique[sid] != canonical:
@@ -320,7 +341,8 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
     private_json(output / 'conversation.json', pack(payload))
     private_json(output / 'manifest.json', {'version': payload['version'], 'sha256': digest(output / 'conversation.json'),
                                           'message_count': len(messages)})
-    return {'saved': len(messages), 'owner': owner, 'peer': peer}
+    return {'saved': len(messages), 'owner': owner, 'peer': peer,
+            'excluded_system_messages': excluded_system}
 
 
 def _mapping(c, table, username, **extras):
