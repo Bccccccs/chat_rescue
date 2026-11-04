@@ -13,6 +13,7 @@ from .workflow import save_chat, connect, digest, private_json
 from .operations import ALL, mac_only, ensure_closed, check_owner, export_root, make_plan, apply_plan
 from .vendor.sqlcipher_probe import library, load_key, DB
 from .runtime import supported_host
+from .shards import database_rels, receipt_covers
 
 
 def run(args):
@@ -84,7 +85,7 @@ def prepare(app, output, signing_id=None, bundle_identifier=None):
 def capture(args):
     mac_only(); ensure_closed()
     app, exe = app_info(args.app)
-    marker = json.loads(app.with_suffix('.prepare.json').read_text())
+    marker = json.loads(app.with_suffix('.prepare.json').read_text(encoding='utf-8'))
     original, original_exe = app_info(args.original_app or marker['original'])
     if str(original) != marker['original'] or original == app or digest(exe) != marker['copy_executable_sha256']:
         raise ValueError('请使用 prepare-key-app 创建的固定副本及对应原版')
@@ -99,11 +100,11 @@ def capture(args):
     for candidate in database_roots:
         if not candidate.is_relative_to(root):
             raise ValueError('账号候选必须位于本次选定的微信目录内')
-        for rel in ALL:
+        for rel in database_rels(candidate):
             if not (candidate / rel).is_file():
                 raise ValueError('请先登录微信并等待本地记录建立：' + rel)
     groups = output.parent / 'capture-groups.json'
-    private_json(groups, [[str((candidate/rel).relative_to(root)) for rel in ALL] for candidate in database_roots])
+    private_json(groups, [[str((candidate/rel).relative_to(root)) for rel in database_rels(candidate)] for candidate in database_roots])
     env = dict(os.environ, PYTHONPATH=run(['/usr/bin/lldb', '-P']).strip())
     print('副本启动后登录本次账号并完成手机确认；验证结束会关闭本次副本。密钥不会输出到终端。', flush=True)
     try:
@@ -122,9 +123,11 @@ def capture(args):
     verified_roots = []
     for candidate in database_roots:
         try:
-            for rel in ALL:
+            rels = database_rels(candidate)
+            for rel in rels:
                 with DB(candidate / rel, load_key(output, candidate / rel)) as d:
-                    d.query('SELECT count(*) FROM sqlite_master')
+                    if d.query('PRAGMA integrity_check;') != [{'integrity_check': 'ok'}]:
+                        raise ValueError('database integrity check failed')
             import re
             from .cipher import literal
             owner = re.sub(r'_[0-9a-fA-F]{4}$', '', candidate.parent.name)
@@ -136,7 +139,7 @@ def capture(args):
             continue
     if not verified_roots:
         raise RuntimeError('尚未完成任何账号的四库及本人身份验证，请检查登录与权限')
-    return {'keys': str(output), 'verified_required_databases': len(ALL),
+    return {'keys': str(output), 'verified_required_databases': len(database_rels(verified_roots[0]['root'])),
             'accounts':verified_roots,
             'instruction': '四个必要数据库验证通过；副本已关闭。导出前保持微信退出。'}
 
@@ -205,14 +208,20 @@ def doctor():
 def verify_keys(root, keys):
     supported_host(); ensure_closed()
     root = Path(root).resolve(strict=True)
-    from .workflow import _single_shard
-    _single_shard(root)
-    for rel in ALL:
+    from .operations import state
+    before = state(root)
+    rels = database_rels(root)
+    for rel in rels:
         with DB(root / rel, load_key(keys, root / rel)) as database:
             if database.query('PRAGMA integrity_check;') != [{'integrity_check': 'ok'}]:
                 raise ValueError('必要数据库完整性验证失败：' + rel)
-    return {'verified_required_databases': len(ALL),
-            'instruction': '四库密钥与完整性验证通过；尚需核对双方身份与数据库结构。'}
+    after = state(root)
+    # Read-only SQLite connections may refresh their own SHM index. This key
+    # verification precedes planning; apply still binds every SHM byte exactly.
+    if set(after) != set(before) or any(after[rel] != value for rel, value in before.items() if not rel.endswith('-shm')):
+        raise ValueError('验证期间数据库或分片清单改变')
+    return {'verified_required_databases': len(rels), 'verified_databases': list(rels),
+            'instruction': '所有消息分片及必要辅助库的密钥与完整性验证通过；尚需核对双方身份与数据库结构。'}
 
 
 def main():
@@ -274,12 +283,8 @@ def main():
         elif a.command == 'export-db': result = export_root(a.db_root, a.keys, a.output)
         elif a.command == 'contacts': result = contacts(a.plain_root, a.query)
         elif a.command == 'save-chat':
-            r = json.loads((Path(a.plain_root) / 'export-report.json').read_text(encoding='utf-8'))
-            account = r['account_directory']
-            if account != a.owner and not account.startswith(a.owner + '_'):
-                raise ValueError('owner 与导出账号目录不匹配')
-            if any(digest(Path(a.plain_root) / rel) != h for rel, h in r['exported'].items()):
-                raise ValueError('导出数据库哈希改变')
+            if not (Path(a.plain_root) / 'export-report.json').is_file():
+                raise ValueError('缺少 export-report.json，请使用完整的项目导出')
             result = save_chat(a.plain_root, a.owner, a.peer, a.output)
         elif a.command == 'plan-restore': result = make_plan(a.source, a.target_db_root, a.target_keys, a.target_owner, a.output)
         else: result = apply_plan(a.plan)

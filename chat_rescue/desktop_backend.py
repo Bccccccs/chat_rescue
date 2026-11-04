@@ -14,6 +14,8 @@ from . import __main__ as cli
 from . import operations as ops
 from .sync import make_sync_plan, apply_sync_plan, undo_sync_plan, conversation_count
 from .workflow import connect, table_for, ident, SUPPORTED, digest, private_json
+from .workflow import plain_profile, check_profile_type
+from .shards import message_rels, database_rels
 
 BASE = Path.home()/'Library/Application Support/Chat Rescue'
 LAUNCHED = []
@@ -237,7 +239,9 @@ def capture_status(payload):
     result = json.loads(receipt.read_text())
     if result.get('state') == 'complete':
         output = Path(request['output'])
-        if result.get('verified_required_databases') != len(ops.ALL) or not output.is_file():
+        accounts = result.get('accounts', [])
+        if (not output.is_file() or not accounts or
+                result.get('verified_required_databases') != len(database_rels(accounts[0]['root']))):
             return {'state':'failed','error':'取钥回执未完成四库验证，请重试'}
         return {'state':'complete','keys':str(output),'accounts':result.get('accounts',[])}
     return {'state':'failed','error':result.get('error','取钥失败，请查看终端提示')}
@@ -252,15 +256,23 @@ def inspect_account(account):
     own = next((r for r in contacts if r['username']==account['owner']), None)
     if not own:
         raise ValueError('数据库联系人中未找到本人身份')
-    rows = []
-    with connect(directory/'message/message_0.db') as c:
-        for contact in contacts:
-            peer = contact['username']
-            if peer==account['owner'] or '@' in peer: continue
-            table=table_for(peer)
-            if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone(): continue
-            types={r[0]:r[1] for r in c.execute('SELECT local_type,count(*) FROM '+ident(table)+' GROUP BY local_type')}
-            rows.append({**contact,'count':sum(types.values()),'unsupported':sum(n for t,n in types.items() if t not in SUPPORTED)})
+    summaries = {}
+    profile = plain_profile(directory)
+    for rel in message_rels(directory):
+        with connect(directory/rel) as c:
+            for contact in contacts:
+                peer = contact['username']
+                if peer==account['owner'] or '@' in peer: continue
+                table=table_for(peer)
+                if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone(): continue
+                summary = summaries.setdefault(peer, {**contact,'count':0,'unsupported':0})
+                for local_type, count in c.execute('SELECT local_type,count(*) FROM '+ident(table)+' GROUP BY local_type'):
+                    summary['count'] += count
+                    try:
+                        check_profile_type(local_type, profile)
+                    except ValueError:
+                        summary['unsupported'] += count
+    rows = list(summaries.values())
     return {'owner':own, 'conversations':rows, 'plain':str(directory)}
 
 

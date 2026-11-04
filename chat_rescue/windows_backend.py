@@ -17,6 +17,7 @@ from .sync import make_sync_plan, apply_sync_plan, undo_sync_plan
 from .windows_capture import app_info, capture
 from .vendor.sqlcipher_probe import DB, load_key
 from .cipher import literal
+from .shards import database_rels, receipt_covers
 
 
 def workspace():
@@ -115,8 +116,9 @@ def resource_processes(root):
     if dll.RmStartSession(C.byref(session), 0, key):
         raise RuntimeError('无法查询账号数据库占用进程')
     try:
-        files = (W.LPCWSTR * len(ALL))(*(str(Path(root) / rel) for rel in ALL))
-        if dll.RmRegisterResources(session, len(ALL), files, 0, None, 0, None):
+        rels = database_rels(root)
+        files = (W.LPCWSTR * len(rels))(*(str(Path(root) / rel) for rel in rels))
+        if dll.RmRegisterResources(session, len(rels), files, 0, None, 0, None):
             raise RuntimeError('无法登记账号数据库查询')
         needed, count, reasons = W.UINT(), W.UINT(64), W.DWORD()
         infos = (Info * 64)()
@@ -146,7 +148,7 @@ def account(value):
     if not result['owner']:
         raise ValueError('请先选择并核对账号')
     check_owner(root, result['owner'])
-    if not all((root / rel).is_file() for rel in ALL):
+    if not all((root / rel).is_file() for rel in database_rels(root)):
         raise ValueError('所选账号缺少四个必要数据库')
     result['root'] = str(root)
     return result
@@ -214,8 +216,12 @@ def dispatch(request):
         process = subprocess.Popen([metadata['executable']], cwd=str(Path(metadata['executable']).parent),
                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return {'slot': slot, 'pids': [process.pid],
-                'instruction': '当前处理账号 ' + slot + '。已请求打开一个原版微信，请本人选择正确账号登录，再点击“读取账号 ' + slot + '”。'}
+                'instruction': ('当前处理账号 B。登录保留记录的账号后，现在从手机 B 将与 A 的聊天导入电脑微信 B；'
+                                '已完整保存在电脑 B 时可直接核对。确认内容与时间范围完整后，勾选确认并读取账号 B。')
+                               if slot == 'B' else '当前处理账号 A。请本人登录并核对目标账号，再点击“读取账号 A”。'}
     if action == 'capture':
+        if request.get('slot') == 'B' and request.get('source_history_confirmed') is not True:
+            raise ValueError('请先完成导入或确认电脑 B 已有完整记录，并核对与 A 的聊天后再读取 B')
         selected = account(request['account'])
         if request.get('identity_confirmed') is not True:
             raise ValueError('请确认本次账号归属后再读取')
@@ -238,6 +244,8 @@ def dispatch(request):
         ensure_closed()
         if request.get('identity_confirmed') is not True:
             raise ValueError('请先核对双方账号身份')
+        if request.get('source_history_confirmed') is not True:
+            raise ValueError('请先确认手机 B 的所需聊天已导入或完整保存在电脑 B，并重新读取核验')
         a, b = account(request['a']), account(request['b'])
         for selected in (a, b):
             require_private(selected['keys'])
@@ -279,7 +287,7 @@ def dispatch(request):
                 raise ValueError('账号任务槽位不受支持')
             selected = account({**item, 'keys': str(path.parent / item['slot'] / 'keys.json')})
             receipt = json.loads((Path(selected['keys']).with_suffix('.capture.json')).read_text(encoding='utf-8'))
-            if receipt.get('state') != 'verified' or receipt.get('verified_required_databases') != 4 or receipt.get('owner') != selected['owner'] or Path(receipt['database_root']).resolve() != Path(selected['root']):
+            if receipt.get('state') != 'verified' or not receipt_covers(selected['root'], receipt) or receipt.get('owner') != selected['owner'] or Path(receipt['database_root']).resolve() != Path(selected['root']):
                 raise ValueError('账号与取钥回执不匹配')
             require_private(selected['keys'])
             own = next((c for c in item.get('contacts', []) if c['username'] == selected['owner']), {})

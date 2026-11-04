@@ -27,3 +27,22 @@ Windows 桌面桥接另有 21 项合成测试，覆盖应用确认与计划哈�
 首次使用另增 3 项工作目录隔离测试，覆盖全新设置为空、原设置保持不变、相对工作路径拒绝，以及当前工作目录昵称与旧实验目录隔离。最终本机完整集114项，104通过、10跳过；Windows界面本次仅编译检查，不替用户继续实际恢复。
 
 0.3.6 安装包新增3项输入测试，拒绝损坏依赖并只打包Git索引内允许的源码/文档/许可，生成相对运行时配置；真实.NET管道另增1项安装目录移动测试。安装包已在中文隔离目录实际安装、打开GUI，并卸载核对私有资料标记仍在。验证仅覆盖本机安装生命周期，不代替干净虚拟机或真实恢复验收。
+
+
+## 2026-11-04 Windows 多分片与类型结构转换
+
+在 `codex/multi-message-shards` 分支使用 Python 3.14.6、Windows x64 和 SQLCipher 4.5.2 community DLL 验证。DLL 沿用 CI 固定的 sqlitepclraw.lib.e_sqlcipher 2.1.11 包及 SHA256 校验。命令：
+
+```powershell
+$env:PYTHONUTF8 = '1'
+$env:SQLCIPHER_LIBRARY = '<已核验的 SQLCipher DLL 绝对路径>'
+python -W error::ResourceWarning -m unittest discover -s tests -v
+```
+
+最终 153 项：143 项通过，10 项因 Mac/Swift 平台条件跳过；SQLCipher 加密集成没有跳过。新增 `tests/test_shards.py` 与 `tests/test_windows_login_flow.py`：覆盖非连续编号/数字排序、非零分片会话、独立 Name2Id 与重复 local_id、跨分片等价消息去重/冲突、未知 Msg 表碰撞、全库原件清单、缺密钥拒绝、计划后新增分片/sidecar、路径越界/候选父目录符号链接拒绝、多个消息库及 WAL/SHM 失败回撤、双向应用与撤回精确还原。密钥验证允许读者自身刷新 SHM 索引，但不允许原 DB/WAL 或分片集合改变；应用仍严格核对全部 SHM 哈希。
+
+新 Windows structured 配置合成测试覆盖 15 种类型/子类型、双方向及重复恢复，保留正文与不透明字段，非文本不套用文本 status；一秒时间差例外仅允许文本。没有真实 server_id、未知方向结构仍不支持。测试不导入或播放真实媒体，不能证明所有类型客户端兼容。
+
+独立审查复现了撤回清单越界以及目标跨分片相同消息误判冲突，两项均以 RED→GREEN 回归修复。额外回归确认候选父目录符号链接不被接受。Windows 的 B 导入提醒/确认门槛通过实际 C# 状态机编译运行，以及 Python 桥接拒绝测试；完整 WPF 本机构建成功，本次没有打开微信或修改真实聊天库，未做真实 GUI 恢复/微信显示/手机迁移验收。
+
+参考远端 `f5153a1` 的 Mac 媒体实现与 B 导入提示；本分支基于 `1215d16`，未合并 Mac 媒体模块。Windows 本次实现全类型消息条目的明确结构转换，不搬运语音/图片/视频/文件本体，不接受 Mac 媒体 v2/v3 bundle。

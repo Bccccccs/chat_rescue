@@ -15,8 +15,9 @@ import struct
 import subprocess
 import time
 from .runtime import current_sid, require_private
-from .workflow import digest, private_json, _single_shard
+from .workflow import digest, private_json
 from .operations import ALL, check_owner
+from .shards import database_rels, check_paths
 from .vendor.capture_keys import verified
 
 NEEDLE = b'com.Tencent.WCDB.Config.Cipher'
@@ -222,14 +223,16 @@ def capture(pid, executable, root, owner, output, timeout=120):
         raise ValueError('PID 或超时参数无效；超时范围 10–300 秒')
     metadata = app_info(executable)
     root, output = Path(root).resolve(strict=True), Path(output).resolve()
-    check_owner(root, owner); _single_shard(root)
+    check_owner(root, owner)
+    rels = database_rels(root)
+    check_paths(root, [r + s for r in rels for s in ('', '-wal', '-shm')])
     if output.exists() or output.with_suffix('.capture.json').exists():
         raise FileExistsError('输出或回执已存在，请保留现场并使用新文件名')
     if output.is_relative_to(root):
         raise ValueError('密钥输出必须位于微信目录之外')
     require_private(output.parent)
     pages = {}
-    for rel in ALL:
+    for rel in rels:
         with (root / rel).open('rb') as stream:
             page = stream.read(4096)
         if len(page) != 4096 or page.startswith(b'SQLite format 3\0'):
@@ -240,7 +243,8 @@ def capture(pid, executable, root, owner, output, timeout=120):
         keys = scan(process, pages, time.monotonic() + timeout)
     finally:
         process.close()
-    if set(keys) != set(ALL) or digest(metadata['executable']) != metadata['sha256']:
+    if (set(keys) != set(rels) or database_rels(root) != rels
+            or digest(metadata['executable']) != metadata['sha256']):
         raise RuntimeError('四库覆盖不足或程序文件改变，拒绝保存')
     for rel, page in pages.items():
         with (root / rel).open('rb') as stream:
@@ -248,13 +252,16 @@ def capture(pid, executable, root, owner, output, timeout=120):
                 raise RuntimeError('取钥期间数据库 salt 改变，拒绝保存')
     # Verify full database integrity with the acquired keys before committing.
     from .vendor.sqlcipher_probe import DB
-    for rel in ALL:
+    for rel in rels:
         with DB(root / rel, keys[rel]) as database:
             if database.query('PRAGMA integrity_check;') != [{'integrity_check': 'ok'}]:
                 raise RuntimeError('四库完整性验证未通过，拒绝保存')
-    private_json(output, {'keys': {rel: {'enc_key': keys[rel]} for rel in ALL}})
+    if database_rels(root) != rels:
+        raise RuntimeError('验证期间分片清单改变，拒绝保存')
+    private_json(output, {'keys': {rel: {'enc_key': keys[rel]} for rel in rels}})
     receipt = output.with_suffix('.capture.json')
-    private_json(receipt, {**metadata, 'state': 'verified', 'verified_required_databases': len(ALL),
+    private_json(receipt, {**metadata, 'state': 'verified', 'verified_required_databases': len(rels),
+                           'verified_databases': list(rels),
                            'owner': owner, 'database_root': str(root), 'pid': pid})
-    return {'keys': str(output), 'receipt': str(receipt), 'verified_required_databases': len(ALL),
-            'instruction': '本次四库验证通过；请本人正常退出微信，随后运行 verify-keys 与 export-db。客户端显示仍未验收。'}
+    return {'keys': str(output), 'receipt': str(receipt), 'verified_required_databases': len(rels),
+            'instruction': '本次所有消息分片及必要辅助库验证通过；请本人正常退出微信，随后运行 verify-keys 与 export-db。客户端显示仍未验收。'}

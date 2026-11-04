@@ -6,11 +6,11 @@
 
 需要 64 位 Windows、Python 3.14+、与 Python 架构一致的 SQLCipher 4 DLL，以及本人授权提供的每个账号独立密钥文件。Windows 不使用 Mac 的 LLDB、`.app` 副本或重签流程；`prepare-key-app` / `capture-keys` 在 Windows 拒绝执行。实验取钥使用单独的 `capture-windows-keys`，要求 x64 微信 4.2.0.x、有效腾讯签名和当前 Windows 用户自己的明确 PID，不启动、注入、终止进程或自动提权。
 
-只接受现有引擎兼容的四库：`message/message_0.db`、`message/message_resource.db`、`session/session.db`、`contact/contact.db`，使用 SQLCipher 4 默认参数与 32 字节原始密钥。目录类似不代表结构兼容。旧版 Windows 的 `Msg/MicroMsg.db` 等结构、其他加密参数、多分片、群聊与其他消息类型不支持；不要改名、删库或删消息来绕过检查。Windows 与 Mac 之间可传同一格式的 bundle，实际恢复仍以目标结构验证为准，不代表任意跨版本互通。
+接受现有引擎兼容的全部 `message/message_N.db` 编号分片（必须含 `message_0.db`），以及 `message/message_resource.db`、`session/session.db`、`contact/contact.db` 三个辅助库，使用 SQLCipher 4 默认参数与 32 字节原始密钥。目录类似不代表结构兼容。旧版 Windows 的 `Msg/MicroMsg.db` 等结构、其他加密参数与群聊不支持；不要改名、删库或删消息来绕过检查。Windows 与 Mac 之间可传同一格式的 bundle，实际恢复仍以目标结构验证为准，不代表任意跨版本互通。
 
-本机 **4.2.0.12 的文本消息**另有已观察的方向配置：packed 字段 2 的发送值为 3、接收值为 2，目标发送 status=2、接收 status=3。导出只从匹配账号目录、owner、四库验证成功的 `.capture.json` 回执选择 `windows-4.2.0.12-text` 配置，并写入导出报告与 bundle；不根据运行系统猜测。没有回执的旧输入保持 `legacy-v1` 的发送值 1；未知版本、方向冲突和 Windows 尚未观察的名片/文件类型仍拒绝。跨平台转换分别使用源与目标配置，不把 1 和 3 当作任意可互换的标记。
+本机 **4.2.0.12 的文本消息**另有已观察的方向配置：packed 字段 2 的发送值为 3、接收值为 2，目标发送 status=2、接收 status=3。源码导出只从匹配账号目录、owner、全部消息分片及辅助库验证成功的 `.capture.json` 回执选择 `windows-4.2.0.12-structured` 配置，并写入导出报告与 bundle；不根据运行系统猜测。没有回执的旧输入保持 `legacy-v1` 的发送值 1；未知版本与方向冲突仍拒绝。新结构配置对所有正 int64 类型做同一明确 packed 结构的发送者/方向转换（含图片、语音、视频、表情、位置、名片和 49 的各子类型），不再按类型白名单拒绝；缺少真实正 server_id 或方向结构的条目仍拒绝，不能伪造字段。类型值、正文、压缩内容与不透明元数据保留；非文本保留原 status/upload/download 状态，避免套用文本状态，资源索引重建；附件内容不搬运。旧 `windows-4.2.0.12-text` 配置继续限文本。全类型转换目前仅有合成证据，不能写成各类型客户端已验收。跨平台转换分别使用源与目标配置，不把 1 和 3 当作任意可互换的标记。
 
-同一真实编号的 Windows 文本在本机两端出现过本地时间相差一秒、sort_seq 同差 1000 的情况。仅当双方均为此配置，正文、压缩内容、类型与发送者均相同，时间差恰好一秒且排序差完全对应时去重，保留各端原记录并报告 `timestamp_variants_preserved` 数量。其他差异仍按冲突拒绝；此例外不用于旧配置或跨平台去重。客户端显示与手机迁移尚未因此得到验证。
+同一真实编号的 Windows 文本在本机两端出现过本地时间相差一秒、sort_seq 同差 1000 的情况。仅对类型 1 文本且双方均为 Windows 配置，正文、压缩内容、类型与发送者均相同，时间差恰好一秒且排序差完全对应时去重，保留各端原记录并报告 `timestamp_variants_preserved` 数量。其他差异仍按冲突拒绝；此例外不用于旧配置或跨平台去重。客户端显示与手机迁移尚未因此得到验证。
 
 ## 环境和私有工作目录
 
@@ -42,7 +42,7 @@ py -3.14 -m chat_rescue inspect-windows-app --exe 'C:\你的微信安装目录\W
 py -3.14 -m chat_rescue capture-windows-keys --pid 1234 --exe 'C:\你的微信安装目录\Weixin.exe' --db-root 'D:\你的微信数据\xwechat_files\wxid_B_后缀\db_storage' --owner 'wxid_B' --output "$env:LOCALAPPDATA\ChatRescue\source-job\source-keys.json" --timeout 120
 ```
 
-`inspect-windows-app` 读取 PE 架构、完整文件版本、SHA256 和 Authenticode 签名，不启动微信。取钥仅只读访问指定 PID，核对进程路径和 Windows 用户，定位已知 Config.Cipher 对象并验证所选四库首页 HMAC；再通过 SQLCipher 检查四库完整性，全部通过才写私有密钥文件与同名 `.capture.json` 回执。超时范围为 10–300 秒，不保存部分结果，也不输出候选密钥、passphrase、内存或聊天正文。回执含程序完整版本与哈希、PID、内部 owner、目录，留在私有工作目录。
+`inspect-windows-app` 读取 PE 架构、完整文件版本、SHA256 和 Authenticode 签名，不启动微信。取钥仅只读访问指定 PID，核对进程路径和 Windows 用户，定位已知 Config.Cipher 对象并验证所选账号全部消息分片及辅助库首页 HMAC；再通过 SQLCipher 检查所有这些库的完整性，全部通过才写私有密钥文件与同名 `.capture.json` 回执。超时范围为 10–300 秒，不保存部分结果，也不输出候选密钥、passphrase、内存或聊天正文。回执含程序完整版本与哈希、PID、内部 owner、目录及精确的 `verified_databases` 清单；实际库数为分片数 + 3，旧四库回执只适用于单分片账号，留在私有工作目录。
 
 `verify-keys` 应在生成恢复计划前完成。本机观察到，只读完整性查询也会更新 SQLite 的 SHM 共享索引；若计划后再次打开原库，可能使完整 DB/WAL/SHM 哈希检查拒绝应用。保留旧任务，退出微信后重新备份并生成候选；不修改旧计划哈希，不删除 sidecar。四库验证成功不代表原库此后一直未变化。
 
@@ -64,7 +64,7 @@ py -3.14 -m chat_rescue contacts --plain-root "$work\source-plain" --query '本�
 py -3.14 -m chat_rescue save-chat --plain-root "$work\source-plain" --owner 'wxid_B' --peer 'wxid_A' --output "$work\chat"
 ```
 
-四库完整性检查通过后，本人仍须确认 owner=B、peer=A。只把 `chat` bundle 经双方约定的私密渠道交给 A；它是明文，压缩不等于加密，不交付密钥或整库。
+全部分片及辅助库完整性检查通过后，本人仍须确认 owner=B、peer=A。只把 `chat` bundle 经双方约定的私密渠道交给 A；它是明文，压缩不等于加密，不交付密钥或整库。
 
 ## A 核对预览并恢复
 

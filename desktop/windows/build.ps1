@@ -17,7 +17,7 @@ $destination = [IO.Path]::GetFullPath($Destination)
 New-Item -ItemType Directory -Force -Path $destination | Out-Null
 $references = @('PresentationFramework.dll','PresentationCore.dll','WindowsBase.dll') | ForEach-Object { '/reference:' + (Join-Path $framework $_) }
 $output = Join-Path $destination 'ChatRescue.exe'
-& $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$output" /reference:System.Xaml.dll /reference:System.Web.Extensions.dll /reference:System.Windows.Forms.dll @references (Join-Path $PSScriptRoot 'ChatRescue.cs') (Join-Path $PSScriptRoot 'BackendTransport.cs')
+& $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$output" /reference:System.Xaml.dll /reference:System.Web.Extensions.dll /reference:System.Windows.Forms.dll @references (Join-Path $PSScriptRoot 'ChatRescue.cs') (Join-Path $PSScriptRoot 'BackendTransport.cs') (Join-Path $PSScriptRoot 'SourceImportFlow.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Windows 桌面应用编译失败' }
 $configuration = @{python=$pythonPath;sqlcipher=$cipherPath;repository=$repository;executable=$Weixin}
 if ($Workspace) {

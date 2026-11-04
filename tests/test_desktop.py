@@ -248,7 +248,10 @@ class CaptureReceiptTests(unittest.TestCase):
         from chat_rescue.workflow import private_json
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);private_json(root/'capture-request.json',{'output':str(root/'keys.json')});private_json(root/'keys.json',{'keys':{}})
-            private_json(root/'capture-result.json',{'state':'complete','verified_required_databases':4})
+            from test_workflow import fixture
+            fixture(root/'plain', True)
+            private_json(root/'capture-result.json',{'state':'complete','verified_required_databases':4,
+                         'accounts':[{'root':str(root/'plain')} ]})
             result=backend.capture_status(root/'capture-request.json')
             self.assertEqual(result['state'],'complete');self.assertEqual(result['keys'],str(root/'keys.json'))
 

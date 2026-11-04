@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from chat_rescue.workflow import (WINDOWS_TEXT_PROFILE, LEGACY_PROFILE, flip_packed, private_json,
+from chat_rescue.workflow import (WINDOWS_TEXT_PROFILE, WINDOWS_STRUCTURED_PROFILE, LEGACY_PROFILE, flip_packed, private_json,
                                   prepare_plain_restore, save_chat, table_for, connect)
 from chat_rescue.operations import capture_direction_profile
 from test_workflow import fixture, db, A, B
@@ -75,6 +75,8 @@ class DirectionProfileTests(unittest.TestCase):
     def test_legacy_to_windows_text_uses_target_flag(self):
         with db(self.source / 'message/message_0.db') as c:
             c.execute('UPDATE ' + table_for(A) + ' SET local_type=1')
+        with db(self.source / 'message/message_resource.db') as c:
+            c.execute('UPDATE MessageResourceInfo SET message_local_type=1')
         private_json(self.target / 'direction-profile.json', {'direction_profile': WINDOWS_TEXT_PROFILE})
         bundle = self.root / 'bundle'; save_chat(self.source, B, A, bundle)
         prepare_plain_restore(bundle, self.target, A, self.root / 'result')
@@ -90,7 +92,7 @@ class DirectionProfileTests(unittest.TestCase):
             save_chat(self.source, B, A, self.root / 'bundle2')
 
     def test_capture_receipt_must_bind_owner_root_and_exact_version(self):
-        root = self.root / B / 'db_storage'; root.mkdir(parents=True)
+        root = self.root / B / 'db_storage'; root.parent.mkdir(parents=True); fixture(root, True)
         keys = self.root / 'keys.json'
         self.assertEqual(capture_direction_profile(root, keys), LEGACY_PROFILE)
         receipt = keys.with_suffix('.capture.json')
@@ -101,4 +103,4 @@ class DirectionProfileTests(unittest.TestCase):
             receipt.write_text(json.dumps({**valid, **change}), encoding='utf-8')
             with self.assertRaises(ValueError): capture_direction_profile(root, keys)
         receipt.write_text(json.dumps(valid), encoding='utf-8')
-        self.assertEqual(capture_direction_profile(root, keys), WINDOWS_TEXT_PROFILE)
+        self.assertEqual(capture_direction_profile(root, keys), WINDOWS_STRUCTURED_PROFILE)

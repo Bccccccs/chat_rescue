@@ -8,14 +8,17 @@ from pathlib import Path
 from . import operations as ops
 from .cipher import encrypt_database
 from .workflow import RELS, connect, table_for, ident, save_chat, prepare_plain_restore, private_json, digest
+from .shards import message_rels, mutable_rels, database_rels, validate_plan_files, check_paths
 
 
 def conversation_count(plain, peer):
-    with connect(Path(plain)/RELS[0]) as c:
-        table = table_for(peer)
-        if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
-            return 0
-        return c.execute('SELECT count(*) FROM '+ident(table)).fetchone()[0]
+    count = 0
+    for rel in message_rels(plain):
+        with connect(Path(plain)/rel) as c:
+            table = table_for(peer)
+            if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                count += c.execute('SELECT count(*) FROM '+ident(table)).fetchone()[0]
+    return count
 
 
 def make_sync_plan(a, b, output):
@@ -67,12 +70,13 @@ def make_sync_plan(a, b, output):
         if not result['added']:
             directions[slot] = {**result, 'state': 'unchanged', 'plan': None}
             continue
-        for rel in RELS:
+        rels = mutable_rels(account['root'])
+        for rel in rels:
             encrypt_database(directory/'recovered-plain'/rel, directory/'candidates'/rel,
                              Path(account['root'])/rel, account['keys'])
         plan = {'version': 1, 'target_root': str(Path(account['root']).resolve()),
                 'target_owner': account['owner'], 'originals': reports[slot]['originals'],
-                'candidates': {r:digest(directory/'candidates'/r) for r in RELS}, 'report':result}
+                'candidates': {r:digest(directory/'candidates'/r) for r in rels}, 'report':result}
         private_json(directory/'plan.json', plan)
         directions[slot] = {**result, 'state': 'ready', 'plan': str(directory)}
     ops.ensure_closed()
@@ -111,7 +115,9 @@ def apply_sync_plan(output):
                 plan = json.loads((directory/'plan.json').read_text(encoding='utf-8'))
                 if plan['target_root'] != account['root'] or plan['target_owner'] != account['owner'] or plan['originals'] != manifest['originals'][slot]:
                     raise ValueError('单向计划与双向身份或快照不一致')
-                if set(plan['candidates']) != set(RELS) or (directory/'apply-started.json').exists():
+                validate_plan_files(account['root'], plan)
+                check_paths(directory/'candidates', plan['candidates'])
+                if (directory/'apply-started.json').exists():
                     raise ValueError('单向计划不可应用')
                 for rel, value in plan['candidates'].items():
                     if (directory/'candidates'/rel).is_symlink() or digest(directory/'candidates'/rel) != value:
@@ -142,10 +148,23 @@ def undo_sync_plan(output):
             raise ValueError('撤回已尝试执行，请查看本机回执')
         manifest=json.loads((output/'sync-plan.json').read_text(encoding='utf-8'))
         result=json.loads((output/'sync-result.json').read_text(encoding='utf-8'))
+        if (manifest.get('version') != 1 or set(manifest.get('accounts', {})) != {'A', 'B'}
+                or set(manifest.get('originals', {})) != {'A', 'B'}
+                or set(result.get('accounts', {})) != {'A', 'B'}):
+            raise ValueError('撤回计划结构不受支持')
+        a, b = manifest['accounts']['A'], manifest['accounts']['B']
+        if a['owner'] == b['owner'] or Path(a['root']).resolve() == Path(b['root']).resolve():
+            raise ValueError('撤回必须使用两个不同账号')
         if result['state'] != 'applied':
             raise ValueError('仅可自动撤回已全部应用的双向计划；部分完成请保留回执处理')
         for slot, account in manifest['accounts'].items():
             ops.check_owner(account['root'],account['owner'])
+            allowed = {rel + suffix for rel in database_rels(account['root']) for suffix in ('', '-wal', '-shm')}
+            if (set(manifest['originals'][slot]) != allowed
+                    or set(result['accounts'][slot]['after']) != allowed):
+                raise ValueError('撤回原件分片及 DB/WAL/SHM 清单不完整或路径无效')
+            check_paths(account['root'], allowed)
+            check_paths(output/(slot+'-plain')/'_encrypted_snapshot', allowed)
             if any((Path(account['root'])/rel).is_symlink() for rel in result['accounts'][slot]['after']):
                 raise ValueError('数据库路径是符号链接，拒绝撤回')
             if ops.state(account['root']) != result['accounts'][slot]['after']:

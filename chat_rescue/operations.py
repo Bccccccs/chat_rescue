@@ -4,9 +4,10 @@ import os
 import platform
 from pathlib import Path
 import shutil
-from .workflow import RELS, digest, private_json, prepare_plain_restore, _single_shard, LEGACY_PROFILE, WINDOWS_TEXT_PROFILE
+from .workflow import RELS, digest, private_json, prepare_plain_restore, LEGACY_PROFILE, WINDOWS_STRUCTURED_PROFILE
 from .cipher import export_database, encrypt_database
 from .runtime import supported_host, ensure_closed, exclusive_lock, make_private
+from .shards import database_rels, mutable_rels, validate_plan_files, check_paths, receipt_covers
 
 ALL = (*RELS, 'contact/contact.db')
 
@@ -24,7 +25,7 @@ def check_owner(root, owner):
 
 def state(root):
     return {rel + suffix: digest(p) if p.exists() else None
-            for rel in ALL for suffix in ('', '-wal', '-shm')
+            for rel in database_rels(root) for suffix in ('', '-wal', '-shm')
             for p in [Path(root) / (rel + suffix)]}
 
 
@@ -37,9 +38,10 @@ def fresh(path):
 
 
 def _copy_snapshot(root, output):
-    _single_shard(root)
+    rels = database_rels(root)
     before = state(root)
-    for rel in ALL:
+    check_paths(root, before)
+    for rel in rels:
         if before[rel] is None:
             raise ValueError('缺少必要数据库：' + rel)
     for rel, value in before.items():
@@ -70,18 +72,19 @@ def export_root(root, keys, output):
     # then bind to snapshot relative paths in a temporary private manifest.
     from .vendor.sqlcipher_probe import load_key
     copied_keys = output / '_snapshot_keys.json'
-    private_json(copied_keys, {'keys': {rel: {'enc_key': load_key(keys, root / rel)} for rel in ALL}})
+    rels = database_rels(root)
+    private_json(copied_keys, {'keys': {rel: {'enc_key': load_key(keys, root / rel)} for rel in rels}})
     try:
-        for rel in ALL:
+        for rel in rels:
             export_database(snapshot / rel, output / rel, copied_keys)
     finally:
         copied_keys.unlink(missing_ok=True)
     if state(root) != before:
         raise ValueError('导出期间原库改变，当前导出不可用于恢复')
     report = {'version': 1, 'account_directory': root.parent.name, 'originals': before, 'direction_profile': profile,
-              'exported': {rel: digest(output / rel) for rel in ALL}}
+              'exported': {rel: digest(output / rel) for rel in rels}}
     private_json(output / 'export-report.json', report)
-    return {'report': str(output / 'export-report.json'), 'database_count': len(ALL)}
+    return {'report': str(output / 'export-report.json'), 'database_count': len(rels)}
 
 
 def capture_direction_profile(root, keys):
@@ -90,13 +93,13 @@ def capture_direction_profile(root, keys):
     if not receipt.exists():
         return LEGACY_PROFILE
     value = json.loads(receipt.read_text(encoding='utf-8'))
-    if (value.get('state') != 'verified' or value.get('verified_required_databases') != 4
+    if (value.get('state') != 'verified' or not receipt_covers(root, value)
             or Path(value.get('database_root', '')).resolve() != Path(root).resolve()):
         raise ValueError('取钥回执与导出账号目录不匹配')
     check_owner(root, value.get('owner') or 'invalid-owner')
     if value.get('file_version') != '4.2.0.12':
         raise ValueError('此 Windows 完整版本尚未验证消息方向，不能生成恢复候选')
-    return WINDOWS_TEXT_PROFILE
+    return WINDOWS_STRUCTURED_PROFILE
 
 
 def make_plan(source, root, keys, owner, output):
@@ -111,13 +114,14 @@ def make_plan(source, root, keys, owner, output):
     export_root(root, keys, exported)
     report = json.loads((exported / 'export-report.json').read_text(encoding='utf-8'))
     result = prepare_plain_restore(source, exported, owner, output / 'recovered-plain')
-    for rel in RELS:
+    rels = mutable_rels(root)
+    for rel in rels:
         encrypt_database(output / 'recovered-plain' / rel, output / 'candidates' / rel, root / rel, keys)
     ensure_closed()
     if state(root) != report['originals']:
         raise ValueError('生成计划期间目标库改变')
     plan = {'version': 1, 'target_root': str(root), 'target_owner': owner,
-            'originals': report['originals'], 'candidates': {r: digest(output / 'candidates' / r) for r in RELS},
+            'originals': report['originals'], 'candidates': {r: digest(output / 'candidates' / r) for r in rels},
             'report': result}
     private_json(output / 'plan.json', plan)
     private_json(output / 'preview.json', {'target_owner': owner, **result})
@@ -129,15 +133,15 @@ def apply_plan(directory):
     directory = Path(directory).resolve(strict=True)
     with exclusive_lock(directory / '.lock'):
         plan = json.loads((directory / 'plan.json').read_text(encoding='utf-8'))
-        if plan.get('version') != 1 or set(plan['candidates']) != set(RELS):
-            raise ValueError('计划格式不受支持')
         if (directory / 'apply-started.json').exists():
             raise ValueError('计划已尝试应用；请检查回执并重新生成计划')
         root = Path(plan['target_root']).resolve(strict=True)
         check_owner(root, plan['target_owner'])
+        rels = validate_plan_files(root, plan)
+        check_paths(directory / 'candidates', rels)
         if directory.is_relative_to(root) or root.is_relative_to(directory):
             raise ValueError('计划与原库目录必须分离')
-        allowed = {r + s for r in ALL for s in ('', '-wal', '-shm')}
+        allowed = {r + s for r in database_rels(root) for s in ('', '-wal', '-shm')}
         if set(plan['originals']) != allowed:
             raise ValueError('计划原件路径不受支持')
         for rel, h in plan['originals'].items():
@@ -161,7 +165,7 @@ def apply_plan(directory):
                 if digest(q) != h:
                     raise ValueError('原件备份哈希不匹配')
         try:
-            for rel in RELS:
+            for rel in rels:
                 p = Path(str(root / rel) + '.chat-rescue-stage')
                 if p.exists():
                     raise ValueError('发现未清理的暂存文件，请检查之前的操作')
@@ -171,12 +175,14 @@ def apply_plan(directory):
                     f.flush(); os.fsync(f.fileno())
                 p.chmod(0o600)
             ensure_closed()
+            if state(root) != plan['originals']:
+                raise ValueError('应用前目标库或分片清单改变')
             for rel, h in plan['originals'].items():
                 p = root / rel
                 if (digest(p) if p.exists() else None) != h:
                     raise ValueError('应用前目标库改变')
             private_json(directory / 'apply-started.json', {'state': 'started', 'backup': str(backup)})
-            for rel, p in zip(RELS, staged):
+            for rel, p in zip(rels, staged):
                 # Mark before touching sidecars so rollback also repairs this DB.
                 replaced.append(rel)
                 for suffix in ('-wal', '-shm'):

@@ -93,7 +93,7 @@ python3.14 -m chat_rescue save-chat \
   --output "$WORK/chat"
 ```
 
-`source-plain/export-report.json` 记录账号目录和四库哈希；`save-chat` 校验该绑定与哈希，因此不要编辑明文库或报告。四库直接位于 `source-plain/message/`、`session/`、`contact/`；`_encrypted_snapshot/` 保存对应加密原件及存在的 WAL/SHM。先检查导出报告和会话参与者映射，再检查 bundle 中确实是 B 与 A 的授权单聊。全文明文库可能含其他联系人和会话，不能分享。bundle 不包含密钥，但消息正文、参与者信息和资源元数据仍是敏感数据。
+`source-plain/export-report.json` 记录账号目录、全部编号分片与辅助库清单及哈希；`save-chat` 校验该绑定与哈希，因此不要编辑明文库或报告。各库沿原始相对路径位于 `source-plain/message/`、`session/`、`contact/`；`_encrypted_snapshot/` 保存对应加密原件及存在的 WAL/SHM。先检查导出报告和会话参与者映射，再检查 bundle 中确实是 B 与 A 的授权单聊。全文明文库可能含其他联系人和会话，不能分享。bundle 不包含密钥，但消息正文、参与者信息和资源元数据仍是敏感数据。
 
 如需打包，只打包 `chat` 目录：
 
@@ -160,11 +160,11 @@ python3.14 -m chat_rescue plan-restore \
   --output "$WORK/restore-plan"
 ```
 
-这一步保存目标四库及存在的 DB/WAL/SHM 快照，建立三库候选与报告，不修改原库。输出包括：
+这一步保存目标全部消息分片与资源/会话/联系人库及存在的 DB/WAL/SHM 快照，建立全部消息分片与资源/会话库候选及报告，不修改原库。输出包括：
 
-- `target-plain/`：目标四库明文、`export-report.json` 与 `_encrypted_snapshot/`。
-- `recovered-plain/`：恢复后的明文四库，供本机逐条检查。
-- `candidates/`：消息、资源、会话三库的加密候选，不改 contact 库。
+- `target-plain/`：目标全部分片与辅助库明文、`export-report.json` 与 `_encrypted_snapshot/`。
+- `recovered-plain/`：恢复后的全部明文库，供本机逐条检查。
+- `candidates/`：全部消息分片、资源库、会话库的加密候选，不改 contact 库。
 - `preview.json`：数量与发送者映射；`plan.json`：原件/候选哈希和目标路径。
 
 先查看数量/映射预览，再检查消息；预览不包含逐条正文：
@@ -212,7 +212,7 @@ PYCODE
 python3.14 -m chat_rescue apply --plan "$WORK/restore-plan"
 ```
 
-计划阶段校验身份、明文完整性与加密候选；`apply` 比对原库（含 WAL/SHM）与候选哈希，不重新解密做完整性验证。它应用消息、资源、会话三库，`originals/` 保留这三库以及存在的 contact 原件和 WAL/SHM；部分失败会尝试回撤。它不自动发送消息，也不修改微信原版签名。`applied.json` 是成功回执，`rollback.json` 记录回撤结果。`apply-started.json` 表示已经开始尝试或中断，不能对同一个计划重复 `apply`；先检查回执与原件。
+计划阶段校验身份、明文完整性与加密候选；`apply` 比对原库（含 WAL/SHM）与候选哈希，不重新解密做完整性验证。它应用全部消息分片、资源库、会话库，`originals/` 保留全部这些库以及 contact 原件和存在的 WAL/SHM；部分失败会尝试回撤。它不自动发送消息，也不修改微信原版签名。`applied.json` 是成功回执，`rollback.json` 记录回撤结果。`apply-started.json` 表示已经开始尝试或中断，不能对同一个计划重复 `apply`；先检查回执与原件。
 
 应用成功后启动 **原版微信**，逐条检查联系人、发送方向、时间、文本/消息条目以及原有记录。保留原件、计划和报告，直到验收完成。如果异常，按 [失败处理](troubleshooting.md)停止后续写入。
 
@@ -224,6 +224,8 @@ python3.14 -m chat_rescue apply --plan "$WORK/restore-plan"
 
 ## Windows 补充入口
 
-Windows 使用 [Windows 离线 SOP](windows.md)：先准备双方授权的已有密钥，各自验证四库，再按 B 导出、A 候选预览、用户确认后应用。Mac 专用副本、签名、LLDB 和权限步骤不适用于 Windows。Windows CLI 与 Mac 共用 bundle 格式，结构不兼容时停止，不保证任意版本互通。下文 Mac 流程继续适用于原有实测环境。
+Windows 使用 [Windows 离线 SOP](windows.md)：先准备双方授权的已有密钥，各自验证全部分片与辅助库，再按 B 导出、A 候选预览、用户确认后应用。Mac 专用副本、签名、LLDB 和权限步骤不适用于 Windows。Windows CLI 与 Mac 共用 bundle 格式，结构不兼容时停止，不保证任意版本互通。下文 Mac 流程继续适用于原有实测环境。
 
-Windows 4.2.0.x x64 另有实验取钥入口：本人在原版微信登录并核对明确 PID、程序路径和账号目录，inspect-windows-app 通过后使用 capture-windows-keys；需要双方授权与实际取钥指令，不在维护任务中运行。四库全部验证并保存私有回执后，请本人退出所有微信，再进入离线验证与导出步骤。本机两个 4.2.0.12 账号已通过取钥与四库验证，其他完整版本及真实恢复显示尚未验收，失败不绕过检查。桌面向导先完成 A 核验并退出，再处理 B；Windows 当前仅核验文本方向，具体边界见 Windows 说明。
+Windows 4.2.0.x x64 另有实验取钥入口：本人在原版微信登录并核对明确 PID、程序路径和账号目录，inspect-windows-app 通过后使用 capture-windows-keys；需要双方授权与实际取钥指令，不在维护任务中运行。四库全部验证并保存私有回执后，请本人退出所有微信，再进入离线验证与导出步骤。本机两个 4.2.0.12 账号已通过取钥与四库验证，其他完整版本及真实恢复显示尚未验收，失败不绕过检查。桌面向导先完成 A 核验并退出，再处理 B；Windows 的真实方向证据仍限文本；源码新增全类型明确结构转换的合成验证，具体边界见 Windows 说明。
+
+Windows 桌面 B 导入时机：A 核验并正常退出之后，在 B 登录、读取 B 数据之前，提示本人从手机 B 将与 A 的聊天导入电脑 B，等导入完成后在电脑 B 核对所需单聊及时间范围；已有完整记录可直接核对。本人勾选确认前禁止读取 B 和生成预览。A 阶段、候选应用后和结果页均不提示再次导入，避免把源导入与恢复后的手机验收混为一谈。

@@ -31,4 +31,4 @@ Issue、PR、终端截图和日志都可能泄露聊天信息。公开反馈仅�
 
 Windows 工作目录用 `init-work --output <新目录>` 创建，工具设置并检查 NTFS ACL。Windows 的 chmod 600 不能证明密钥私有；读取密钥会验证 ACL，拒绝其他用户授权、空 DACL 或无法识别的授权条目。已有密钥复制到私有目录后应继承该目录权限。不要使用无 ACL 的文件系统或共享目录保存密钥与明文资料。仅分享双方约定的单聊 bundle；详细操作见 [Windows 说明](windows.md)。
 
-`capture-windows-keys` 仅在用户要求实际取钥时只读扫描当前用户明确指定的微信 PID；只把所选账号四库验证通过的密钥写入私有文件，不保存内存转储、候选密钥或 passphrase。`.capture.json` 记录版本/哈希、PID、内部账号及路径，同样属于本机私有资料，不提交 Git。
+`capture-windows-keys` 仅在用户要求实际取钥时只读扫描当前用户明确指定的微信 PID；只把所选账号全部消息分片及三个辅助库验证通过的密钥写入私有文件，不保存内存转储、候选密钥或 passphrase。`.capture.json` 记录版本/哈希、PID、内部账号及路径，同样属于本机私有资料，不提交 Git。

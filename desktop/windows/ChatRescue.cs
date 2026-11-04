@@ -1,4 +1,4 @@
-// Native WPF shell. Database operations stay in the Python backend.
+﻿// Native WPF shell. Database operations stay in the Python backend.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -16,7 +16,7 @@ namespace ChatRescueWindows {
 public class Wizard : Window {
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 16000000 };
     readonly string[] titles = { "准备软件", "登录两个账号", "读取双方聊天", "确认补齐预览", "检查恢复结果" };
-    readonly string[] subtitles = { "检查环境，准备本机恢复工作区", "先登录并核验 A，退出后再处理 B", "验证身份与四库，保留原件并生成候选", "核对双方昵称、收发方向和新增数量", "分别确认数据库、电脑显示和手机结果" };
+    readonly string[] subtitles = { "检查环境，准备本机恢复工作区", "先登录并核验 A，退出后再处理 B", "验证身份与全部消息分片，保留原件并生成候选", "核对双方昵称、收发方向和新增数量", "分别确认数据库、电脑显示和手机结果" };
     readonly Brush blue = ColorBrush("#2463EB"), ink = ColorBrush("#17263D"), muted = ColorBrush("#6E7D92"), teal = ColorBrush("#158A78");
     Dictionary<string, object> config, environment, plan, simulation;
     readonly Dictionary<string, object>[] accounts = { Account(), Account() };
@@ -26,6 +26,7 @@ public class Wizard : Window {
     string executable = "", work = "", message = "先完成环境检查，再按左侧五步继续。";
     int step; bool busy, prepared, identityConfirmed, previewConfirmed, clientConfirmed, loadedSettings;
     readonly bool[] accountVerified = { false, false };
+    readonly SourceImportFlow sourceImport = new SourceImportFlow();
 
     static Brush ColorBrush(string hex) { return new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)); }
     static Dictionary<string, object> Account() { return D("owner", "", "root", "", "keys", "", "nickname", ""); }
@@ -62,7 +63,7 @@ public class Wizard : Window {
         var brand=new StackPanel{Margin=new Thickness(23,30,15,30)};
         brand.Children.Add(Text("↔  Chat Rescue",21,ink,true)); brand.Children.Add(Text("双方聊天互相补齐",12,muted)); DockPanel.SetDock(brand,Dock.Top);side.Children.Add(brand);
         var bottom=new StackPanel{Margin=new Thickness(23,20,15,25)};
-        bottom.Children.Add(Link("一步一步使用指南",delegate { MessageBox.Show(this,"1. 检查环境并选择腾讯原版微信。\n2. 先打开 A，本人登录并读取核验。正常退出微信后再打开 B，登录并读取。\n3. 两个账号核验完成、微信正常退出后生成预览。已有密钥可退出后直接读取验证。\n4. 核对昵称、数量、方向，确认后才应用。\n5. 在原版微信核对显示；手机迁移单独验收。\n\n遇到冲突或空白账号未初始化时停止，保留原件，不删除聊天。","使用指南"); }));
+        bottom.Children.Add(Link("一步一步使用指南",delegate { MessageBox.Show(this,"1. 检查环境并选择腾讯原版微信。\n2. 先打开 A，本人登录并读取核验。正常退出微信后再打开 B，登录后将手机 B 中与 A 的聊天导入电脑 B（已完整存在则直接核对），确认后读取 B。\n3. 两个账号核验完成、微信正常退出后生成预览。已有密钥可退出后直接读取验证。\n4. 核对昵称、数量、方向，确认后才应用。\n5. 在原版微信核对显示；手机迁移单独验收。\n\n遇到冲突或空白账号未初始化时停止，保留原件，不删除聊天。","使用指南"); }));
         bottom.Children.Add(Link("载入隔离测试报告",LoadSimulation));
         bottom.Children.Add(Text("0.3.6 · Windows 实验版",11,muted));
         bottom.Children.Add(Link("开源许可",delegate{OpenDirectory(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"licenses"));}));DockPanel.SetDock(bottom,Dock.Bottom); side.Children.Add(bottom);
@@ -120,20 +121,25 @@ public class Wizard : Window {
 
     void AccountCard(int index,Panel parent){
         var card=Card(parent);Heading(card,(index==0?"A · 目标账号 / 误删方":"B · 源账号 / 保留方"));card.Children.Add(Text(AccountName(index),22,index==0?blue:teal,true));
-        Para(card,accountVerified[index]?"✓ 本次四库与本人昵称已核验":S(accounts[index],"keys").Length>0?"已关联密钥文件 · 请点击读取重新核验":"登录并读取后显示本人昵称");
+        Para(card,accountVerified[index]?"✓ 本次全部消息分片与本人昵称已核验":S(accounts[index],"keys").Length>0?"已关联密钥文件 · 请点击读取重新核验":"登录并读取后显示本人昵称");
         var combo=new ComboBox{Margin=new Thickness(0,8,0,8)};combo.Items.Add(new ComboBoxItem{Content="选择本次账号目录…",Tag=null});combo.SelectedIndex=0;
         foreach(var candidate in candidates){var item=new ComboBoxItem{Content=S(candidate,"label"),Tag=candidate};combo.Items.Add(item);if(S(candidate,"root")==S(accounts[index],"root"))combo.SelectedItem=item;}
-        combo.SelectionChanged+=delegate{var item=combo.SelectedItem as ComboBoxItem;if(item!=null && item.Tag!=null){var selected=Obj(item.Tag);if(S(accounts[index],"root")!=S(selected,"root")){accounts[index]["root"]=S(selected,"root");accounts[index]["owner"]=S(selected,"owner");accounts[index]["keys"]="";accounts[index]["nickname"]="";accountVerified[0]=accountVerified[1]=false;identityConfirmed=false;InvalidatePlan();Render();}}};card.Children.Add(combo);
+        combo.SelectionChanged+=delegate{var item=combo.SelectedItem as ComboBoxItem;if(item!=null && item.Tag!=null){var selected=Obj(item.Tag);if(S(accounts[index],"root")!=S(selected,"root")){accounts[index]["root"]=S(selected,"root");accounts[index]["owner"]=S(selected,"owner");accounts[index]["keys"]="";accounts[index]["nickname"]="";accountVerified[0]=accountVerified[1]=false;sourceImport.Reset();identityConfirmed=false;InvalidatePlan();Render();}}};card.Children.Add(combo);
         if(S(accounts[index],"root").Length>0){var details=new Expander{Header="账号详情（可选）",Margin=new Thickness(0,5,0,4)};details.Content=Text("内部身份："+S(accounts[index],"owner")+"\n所选目录："+S(accounts[index],"root"),11,muted);card.Children.Add(details);}
         string slot=index==0?"A":"B";
-        var launch=Button("打开微信 "+slot,delegate{Run("正在打开账号 "+slot+" 的原版微信…",D("action","launch","slot",slot,"a",accounts[0],"executable",executable),delegate(Dictionary<string,object> r){SetStatus(S(r,"instruction"));});},true);launch.IsEnabled=index==0||accountVerified[0];Row(card).Children.Add(launch);
+        var launch=Button("打开微信 "+slot,delegate{Run("正在打开账号 "+slot+" 的原版微信…",D("action","launch","slot",slot,"a",accounts[0],"executable",executable),delegate(Dictionary<string,object> r){accountVerified[index]=false;if(index==0)accountVerified[1]=false;sourceImport.Reset();InvalidatePlan();SetStatus(S(r,"instruction"));Render();});},true);launch.IsEnabled=index==0||accountVerified[0];Row(card).Children.Add(launch);
         if(index==1&&!accountVerified[0])Para(card,"先完成左侧 A 的读取核验，再打开 B。");
-        var actions=Row(card);actions.Children.Add(Button("导入已有密钥",delegate{var f=new OpenFileDialog{Filter="私有密钥清单|*.json"};if(f.ShowDialog(this)==true){accounts[index]["keys"]=f.FileName;accountVerified[0]=accountVerified[1]=false;InvalidatePlan();Render();}}));
-        var read=Button("读取账号 "+slot,delegate{Run("正在核验账号 "+slot+"：已登录时取钥，已退出时验证已有密钥…",D("action","capture","account",accounts[index],"identity_confirmed",identityConfirmed,"executable",executable),delegate(Dictionary<string,object> r){accounts[index]=Obj(Get(r,"account"));accountVerified[index]=true;if(index==0)accountVerified[1]=false;InvalidatePlan();SetStatus(index==0?"A 已核验："+AccountName(0)+"。请从微信菜单正常退出，再打开 B。":"B 已核验："+AccountName(1)+"。请正常退出微信，再生成双方补齐预览。");Render();});},true);read.IsEnabled=identityConfirmed && S(accounts[index],"root").Length>0 && (index==0||accountVerified[0]);actions.Children.Add(read);
+        if(index==1 && accountVerified[0] && !accountVerified[1]) {
+            Para(card,sourceImport.Reminder("B",false));
+            var history=new CheckBox{Content="我已完成导入或确认电脑 B 已有完整记录，并在电脑 B 核对了与 A 的聊天",IsChecked=sourceImport.Confirmed,Margin=new Thickness(0,10,0,10)};
+            history.Click+=delegate{sourceImport.Confirm(history.IsChecked==true);InvalidatePlan();Render();};card.Children.Add(history);
+        }
+        var actions=Row(card);actions.Children.Add(Button("导入已有密钥",delegate{var f=new OpenFileDialog{Filter="私有密钥清单|*.json"};if(f.ShowDialog(this)==true){accounts[index]["keys"]=f.FileName;accountVerified[0]=accountVerified[1]=false;sourceImport.Reset();InvalidatePlan();Render();}}));
+        var read=Button("读取账号 "+slot,delegate{Run("正在核验账号 "+slot+"：已登录时取钥，已退出时验证已有密钥…",D("action","capture","slot",slot,"account",accounts[index],"identity_confirmed",identityConfirmed,"source_history_confirmed",sourceImport.Confirmed,"executable",executable),delegate(Dictionary<string,object> r){accounts[index]=Obj(Get(r,"account"));accountVerified[index]=true;if(index==0){accountVerified[1]=false;sourceImport.Reset();}InvalidatePlan();SetStatus(index==0?"A 已核验："+AccountName(0)+"。请从微信菜单正常退出，再打开 B，导入并核对手机 B 中与 A 的聊天。":"B 已核验："+AccountName(1)+"。请正常退出微信，再生成双方补齐预览。");Render();});},true);read.IsEnabled=identityConfirmed && S(accounts[index],"root").Length>0 && sourceImport.CanRead(slot,accountVerified[0]);actions.Children.Add(read);
     }
 
     void Login(){
-        var card=Card(page);Heading(card,accountVerified[1]?"A、B 本次核验已完成":accountVerified[0]?"接下来处理 B · "+AccountName(1):"当前先处理 A · "+AccountName(0));Para(card,"A 是希望恢复记录的目标账号；B 是提供保留记录的源账号。\n1   打开 A → 本人登录 → 核对账号并点击“读取账号 A”。\n2   从微信菜单正常退出整个程序 → 打开 B → 登录并读取 B。\n每次只打开一个微信。如果登录页记住的是另一账号，请本人切换到本次账号。已有密钥且微信已退出时，可直接读取验证，无需重复登录。");
+        var card=Card(page);Heading(card,accountVerified[1]?"A、B 本次核验已完成":accountVerified[0]?"接下来处理 B · "+AccountName(1):"当前先处理 A · "+AccountName(0));Para(card,"A 是希望恢复记录的目标账号；B 是提供保留记录的源账号。\n1   打开 A → 本人登录 → 核对账号并点击“读取账号 A”。\n2   从微信菜单正常退出整个程序 → 打开 B → 登录 → 将手机 B 中与 A 的聊天导入电脑 B → 核对完整后读取 B。\n每次只打开一个微信。如果登录页记住的是另一账号，请本人切换到本次账号。已有密钥且微信已退出时，可直接读取验证，无需重复登录。");
         var check=new CheckBox{Content="我确认所选 A、B 是本次双方授权的两个账号",IsChecked=identityConfirmed,Margin=new Thickness(0,12,0,12)};check.Click+=delegate{identityConfirmed=check.IsChecked==true;InvalidatePlan();Render();};card.Children.Add(check);
         var buttons=Row(card);
         buttons.Children.Add(Button("刷新账号目录",delegate{Run("正在查找本机账号目录…",D("action","status"),AcceptStatus);}));
@@ -141,16 +147,16 @@ public class Wizard : Window {
         var row=new Grid();row.ColumnDefinitions.Add(new ColumnDefinition());row.ColumnDefinitions.Add(new ColumnDefinition());page.Children.Add(row);
         for(int i=0;i<2;i++){var p=new StackPanel{Margin=new Thickness(i==0?0:9,0,i==0?9:0,0)};Grid.SetColumn(p,i);row.Children.Add(p);AccountCard(i,p);}
         var footer=Card(page);
-        var next=Button("下一步：读取双方聊天 →",delegate{step=2;Render();},true);next.IsEnabled=identityConfirmed&&accountVerified[0]&&accountVerified[1];Row(footer).Children.Add(next);
+        var next=Button("下一步：读取双方聊天 →",delegate{step=2;Render();},true);next.IsEnabled=identityConfirmed&&accountVerified[0]&&accountVerified[1]&&sourceImport.Confirmed;Row(footer).Children.Add(next);
     }
 
     void Reading(){
-        var card=Card(page);Heading(card,"验证、备份与预览");Para(card,"1   先打开 A，登录并读取 A；正常退出后再打开并读取 B。");Para(card,"2   B 核验完成后，从微信菜单正常退出整个程序。已有密钥且微信已退出时可直接读取验证。");Para(card,"3   点击生成预览。软件检查退出状态、保存 DB/WAL/SHM 原件，再建立恢复候选。");
+        var card=Card(page);Heading(card,"验证、备份与预览");Para(card,"1   先打开 A，登录并读取 A；正常退出后再打开 B，导入并核对手机 B 中与 A 的聊天后读取 B。");Para(card,"2   B 核验完成后，从微信菜单正常退出整个程序。已有密钥且微信已退出时可直接读取验证。");Para(card,"3   点击生成预览。软件检查退出状态、保存 DB/WAL/SHM 原件，再建立恢复候选。");
         var check=new CheckBox{Content="我已核对两个账号及双方授权",IsChecked=identityConfirmed,Margin=new Thickness(0,10,0,12)};check.Click+=delegate{identityConfirmed=check.IsChecked==true;InvalidatePlan();Render();};card.Children.Add(check);
         var blocks=new Grid();blocks.ColumnDefinitions.Add(new ColumnDefinition());blocks.ColumnDefinitions.Add(new ColumnDefinition());card.Children.Add(blocks);
         for(int i=0;i<2;i++){var p=new StackPanel{Margin=new Thickness(0,8,10,0)};Grid.SetColumn(p,i);blocks.Children.Add(p);AccountCard(i,p);}
-        var generate=Button("微信已退出，生成双方补齐预览",delegate{InvalidatePlan();Run("正在备份、读取并生成预览，请不要启动微信…",D("action","plan","a",accounts[0],"b",accounts[1],"identity_confirmed",identityConfirmed),delegate(Dictionary<string,object> r){plan=r;simulation=null;step=3;SetStatus("候选已生成。请核对身份与数量，确认后才会应用。");Render();});},true);
-        generate.IsEnabled=identityConfirmed && accountVerified[0] && accountVerified[1];Row(card).Children.Add(generate);
+        var generate=Button("微信已退出，生成双方补齐预览",delegate{InvalidatePlan();Run("正在备份、读取并生成预览，请不要启动微信…",D("action","plan","a",accounts[0],"b",accounts[1],"identity_confirmed",identityConfirmed,"source_history_confirmed",sourceImport.Confirmed),delegate(Dictionary<string,object> r){plan=r;simulation=null;step=3;SetStatus("候选已生成。请核对身份与数量，确认后才会应用。");Render();});},true);
+        generate.IsEnabled=identityConfirmed && accountVerified[0] && accountVerified[1] && sourceImport.Confirmed;Row(card).Children.Add(generate);
         Row(card).Children.Add(Button("载入上次隔离测试报告",LoadSimulation));
     }
 
@@ -182,7 +188,7 @@ public class Wizard : Window {
         if(plan!=null && S(plan,"state")=="applied")Row(card).Children.Add(Button("撤回本次补齐",delegate{if(MessageBox.Show(this,"仅在两个账号都没有新消息或数据库变化时允许撤回。撤回前还会保存当前原件。\n\n确认撤回这份任务？\n"+Summary(),"确认撤回",MessageBoxButton.OKCancel,MessageBoxImage.Question)!=MessageBoxResult.OK)return;Run("正在核对后续变化并撤回…",D("action","undo","plan",S(plan,"plan"),"plan_hash",S(plan,"plan_hash"),"confirmed",true),delegate(Dictionary<string,object> result){plan["state"]=S(result,"state");clientConfirmed=false;SetStatus("已撤回本次补齐，请保留撤回前原件并检查微信。");Render();});}));
     }
 
-    void ImportAccounts(){var f=new OpenFileDialog{Filter="已验证账号任务|verified-accounts.json|JSON 文件|*.json"};if(f.ShowDialog(this)!=true)return;Run("正在核对账号取钥回执…",D("action","import-accounts","path",f.FileName),delegate(Dictionary<string,object> result){var values=A(Get(result,"accounts"));for(int i=0;i<2;i++){accounts[i]=Obj(values[i]);bool exists=false;foreach(var c in candidates)if(S(c,"root")==S(accounts[i],"root"))exists=true;if(!exists)candidates.Add(D("root",S(accounts[i],"root"),"owner",S(accounts[i],"owner"),"label",AccountName(i)));}accountVerified[0]=accountVerified[1]=false;identityConfirmed=false;InvalidatePlan();step=1;SetStatus(S(result,"instruction"));Render();});}
+    void ImportAccounts(){var f=new OpenFileDialog{Filter="已验证账号任务|verified-accounts.json|JSON 文件|*.json"};if(f.ShowDialog(this)!=true)return;Run("正在核对账号取钥回执…",D("action","import-accounts","path",f.FileName),delegate(Dictionary<string,object> result){var values=A(Get(result,"accounts"));for(int i=0;i<2;i++){accounts[i]=Obj(values[i]);bool exists=false;foreach(var c in candidates)if(S(c,"root")==S(accounts[i],"root"))exists=true;if(!exists)candidates.Add(D("root",S(accounts[i],"root"),"owner",S(accounts[i],"owner"),"label",AccountName(i)));}accountVerified[0]=accountVerified[1]=false;sourceImport.Reset();identityConfirmed=false;InvalidatePlan();step=1;SetStatus(S(result,"instruction"));Render();});}
     void LoadSimulation(){var f=new OpenFileDialog{Filter="隔离模拟回执|simulation-report.json|JSON 文件|*.json"};if(f.ShowDialog(this)!=true)return;Run("正在读取隔离模拟报告…",D("action","simulation-report","path",f.FileName),delegate(Dictionary<string,object> result){simulation=result;plan=null;step=3;SetStatus("当前为隔离测试结果，不能应用到真实账号。");Render();});}
     void LoadPlan(){var dialog=new System.Windows.Forms.FolderBrowserDialog{Description="选择含 sync-plan.json 的双向任务目录"};if(dialog.ShowDialog()!=System.Windows.Forms.DialogResult.OK)return;Run("正在载入历史回执…",D("action","resume","plan",dialog.SelectedPath),delegate(Dictionary<string,object> result){plan=result;simulation=null;previewConfirmed=false;clientConfirmed=B(result,"client_confirmed");step=3;SetStatus("已载入历史任务，请重新核对预览与回执状态。");Render();});}
     void OpenDirectory(string path){if(Directory.Exists(path))Process.Start(new ProcessStartInfo(path){UseShellExecute=true});}
