@@ -225,7 +225,7 @@ def doctor():
             'supported_wechat': 'Windows: 未完成客户端实测，仅接受兼容四库结构与 SQLCipher 4' if windows else '4.1.13',
             'key_capture_available': not windows and host,
             'experimental_windows_capture_available': windows and host,
-            'windows_capture_target': '4.2.0.x x64, pending client validation' if windows else None,
+            'windows_capture_target': '4.2.x.x x64, pending client validation' if windows else None,
             'instruction': 'Windows ready 仅指离线依赖就绪；需要本人授权的已有密钥文件，先运行 verify-keys。' if windows else '失败项见 README；系统权限需首次取钥时验证。'}
 
 

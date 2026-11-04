@@ -1,4 +1,4 @@
-"""Experimental, explicitly scoped Windows 4.2.0 x64 read-only capture.
+"""Experimental, explicitly scoped Windows 4.2 x64 read-only capture.
 
 Config.Cipher layout/mask adapted from TANGandXUE/wcdb-key-tool at
 79f1b5b92e12c66aa281b4a60a3c478b5f547dfa (MIT).
@@ -17,6 +17,7 @@ import time
 from .runtime import current_sid, require_private
 from .workflow import digest, private_json
 from .operations import ALL, check_owner
+from .windows_version import is_windows_42_version
 from .shards import database_rels, check_paths
 from .vendor.capture_keys import verified
 
@@ -57,8 +58,8 @@ def app_info(executable):
     if fields[0] != 0xFEEF04BD:
         raise ValueError('版本资源无效')
     parts = (fields[2] >> 16, fields[2] & 0xffff, fields[3] >> 16, fields[3] & 0xffff)
-    if parts[:3] != (4, 2, 0):
-        raise ValueError('Windows 实验取钥目前仅接受 4.2.0.x；不能据此宣称已实机支持')
+    if not is_windows_42_version('.'.join(map(str, parts))):
+        raise ValueError('Windows 实验取钥目前仅接受 4.2.x.x；不能据此宣称已实机支持')
     env = dict(os.environ, CHAT_RESCUE_INSPECT_EXE=str(executable))
     script = ("$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new(); "
               "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop; "
@@ -183,7 +184,7 @@ def scan(process, pages, deadline):
             if len(needles) > 256:
                 raise ValueError('Config.Cipher 特征过多，拒绝无界扫描')
     if not needles:
-        raise RuntimeError('未找到已知 WCDB 特征；4.2.0 布局可能需重新适配')
+        raise RuntimeError('未找到已知 WCDB 特征；此 4.2 版本布局可能需重新适配')
     def u64(data, offset):
         return struct.unpack_from('<Q', data, offset)[0] if len(data) >= offset + 8 else 0
     found, seen = {}, set()

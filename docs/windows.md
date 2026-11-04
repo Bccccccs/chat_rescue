@@ -1,14 +1,14 @@
 # Windows 离线实验版
 
-0.5.1 的[Windows 安装包与跨电脑部署](windows-deployment.md)已内置运行依赖。Windows CLI 可以使用双方授权的已有密钥完成四库验证、导出、单聊 bundle 交换、视角转换、候选生成、应用和本机双向补齐。另有 [Windows 五步桌面向导](windows-desktop.md) 的本机构建，沿用 Mac 操作顺序。新增面向 **微信 4.2.0.x x64** 的只读实验取钥命令；Mac 原生桌面与取钥流程保留。本机 4.2.0.12 两个账号已通过真实取钥与四库导出；完全空白账号缺少 Name2Id 的恢复初始化尚未适配，真实 GUI 应用、客户端显示和手机迁移未验收，不能把本版称为开箱即用的 Windows 微信恢复软件。
+0.5.2 的[Windows 安装包与跨电脑部署](windows-deployment.md)已内置运行依赖。Windows CLI 可以使用双方授权的已有密钥完成四库验证、导出、单聊 bundle 交换、视角转换、候选生成、应用和本机双向补齐。另有 [Windows 五步桌面向导](windows-desktop.md) 的本机构建，沿用 Mac 操作顺序。新增面向 **微信 4.2.x.x x64** 的只读实验取钥命令；Mac 原生桌面与取钥流程保留。本机 4.2.0.12 两个账号已通过真实取钥与四库导出；完全空白账号缺少 Name2Id 的恢复初始化尚未适配，真实 GUI 应用、客户端显示和手机迁移未验收，不能把本版称为开箱即用的 Windows 微信恢复软件。
 
 ## 输入和边界
 
-需要 64 位 Windows、Python 3.14+、与 Python 架构一致的 SQLCipher 4 DLL，以及本人授权提供的每个账号独立密钥文件。Windows 不使用 Mac 的 LLDB、`.app` 副本或重签流程；`prepare-key-app` / `capture-keys` 在 Windows 拒绝执行。实验取钥使用单独的 `capture-windows-keys`，要求 x64 微信 4.2.0.x、有效腾讯签名和当前 Windows 用户自己的明确 PID，不启动、注入、终止进程或自动提权。
+需要 64 位 Windows、Python 3.14+、与 Python 架构一致的 SQLCipher 4 DLL，以及本人授权提供的每个账号独立密钥文件。Windows 不使用 Mac 的 LLDB、`.app` 副本或重签流程；`prepare-key-app` / `capture-keys` 在 Windows 拒绝执行。实验取钥使用单独的 `capture-windows-keys`，要求 x64 微信 4.2.x.x、有效腾讯签名和当前 Windows 用户自己的明确 PID，不启动、注入、终止进程或自动提权。
 
 接受现有引擎兼容的全部 `message/message_N.db` 编号分片（必须含 `message_0.db`），以及 `message/message_resource.db`、`session/session.db`、`contact/contact.db` 三个辅助库，使用 SQLCipher 4 默认参数与 32 字节原始密钥。目录类似不代表结构兼容。旧版 Windows 的 `Msg/MicroMsg.db` 等结构、其他加密参数与群聊不支持；不要改名、删库或删消息来绕过检查。Windows 与 Mac 之间可传同一格式的 bundle，实际恢复仍以目标结构验证为准，不代表任意跨版本互通。
 
-本机 **4.2.0.12 的文本消息**另有已观察的方向配置：packed 字段 2 的发送值为 3、接收值为 2，目标发送 status=2、接收 status=3。源码导出只从匹配账号目录、owner、全部消息分片及辅助库验证成功的 `.capture.json` 回执选择 `windows-4.2.0.12-structured` 配置，并写入导出报告与 bundle；不根据运行系统猜测。没有回执的旧输入保持 `legacy-v1` 的发送值 1；未知版本与方向冲突仍拒绝。新结构配置对所有正 int64 类型做同一明确 packed 结构的发送者/方向转换（含图片、语音、视频、表情、位置、名片和 49 的各子类型），不再按类型白名单拒绝；缺少真实正 server_id 或方向结构的条目仍拒绝，不能伪造字段。类型值、正文、压缩内容与不透明元数据保留；非文本保留原 status/upload/download 状态，避免套用文本状态，资源索引重建；附件内容不搬运。旧 `windows-4.2.0.12-text` 配置继续限文本。全类型转换目前仅有合成证据，不能写成各类型客户端已验收。跨平台转换分别使用源与目标配置，不把 1 和 3 当作任意可互换的标记。
+本机 **4.2.0.12 的文本消息**另有已观察的方向配置：packed 字段 2 的发送值为 3、接收值为 2，目标发送 status=2、接收 status=3。源码导出只从匹配账号目录、owner、全部消息分片及辅助库验证成功的 `.capture.json` 回执选择 `windows-4.2.0.12-structured` 配置，并写入导出报告与 bundle；不根据运行系统猜测。没有回执的旧输入保持 `legacy-v1` 的发送值 1；回执完整版本须为 4.2.x.x；其他 4.2 版本沿用 structured 配置并保留逐条校验，实机兼容性尚未验证。非 4.2 版本、格式不完整的版本及实际方向冲突仍拒绝。新结构配置对所有正 int64 类型做同一明确 packed 结构的发送者/方向转换（含图片、语音、视频、表情、位置、名片和 49 的各子类型），不再按类型白名单拒绝；缺少真实正 server_id 或方向结构的条目仍拒绝，不能伪造字段。类型值、正文、压缩内容与不透明元数据保留；非文本保留原 status/upload/download 状态，避免套用文本状态，资源索引重建；附件内容不搬运。旧 `windows-4.2.0.12-text` 配置继续限文本。全类型转换目前仅有合成证据，不能写成各类型客户端已验收。跨平台转换分别使用源与目标配置，不把 1 和 3 当作任意可互换的标记。
 
 同一真实编号的 Windows 文本在本机两端出现过本地时间相差一秒、sort_seq 同差 1000 的情况。仅对类型 1 文本且双方均为 Windows 配置，正文、压缩内容、类型与发送者均相同，时间差恰好一秒且排序差完全对应时去重，保留各端原记录并报告 `timestamp_variants_preserved` 数量。其他差异仍按冲突拒绝；此例外不用于旧配置或跨平台去重。客户端显示与手机迁移尚未因此得到验证。
 
@@ -32,7 +32,7 @@ py -3.14 -m chat_rescue roots --search-path 'D:\你的微信数据\xwechat_files
 
 SQLCipher DLL 及依赖需从可信来源提供，普通 SQLite DLL 不适用；`SQLCIPHER_LIBRARY` 使用绝对路径。DLL 依赖可放在同目录。运行依赖就绪仅代表 `doctor` 通过，不代表密钥、身份或微信结构已经验证。SQLCipher 配置依据 [官方 API](https://www.zetetic.net/sqlcipher/sqlcipher-api/)。Python 可从 [官方 Windows 下载页](https://www.python.org/downloads/windows/)安装。
 
-## 微信 4.2.0.x 实验取钥
+## 微信 4.2.x.x 实验取钥
 
 这部分仅在用户明确要求实际取钥时执行；代码维护任务不得启动真实微信或扫描真实进程。用户自己在原版微信登录本次账号，在任务管理器“详细信息”中核对主进程 PID 和程序路径；同时核对本次账号的实际 db_storage。工具不自动从多个进程或账号中挑选。
 

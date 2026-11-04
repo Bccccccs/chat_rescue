@@ -8,6 +8,7 @@ from .workflow import _single_shard, RELS, digest, private_json, prepare_plain_r
 from .cipher import export_database, encrypt_database
 from .voice import MEDIA, CAPABILITY, single_media
 from .runtime import supported_host, ensure_closed, exclusive_lock, make_private
+from .windows_version import is_windows_42_version
 from .shards import message_shards, database_rels, mutable_rels, validate_plan_files, check_paths, receipt_covers
 
 ALL = (*RELS, 'contact/contact.db')
@@ -161,8 +162,9 @@ def capture_direction_profile(root, keys):
             or Path(value.get('database_root', '')).resolve() != Path(root).resolve()):
         raise ValueError('取钥回执与导出账号目录不匹配')
     check_owner(root, value.get('owner') or 'invalid-owner')
-    if value.get('file_version') != '4.2.0.12':
-        raise ValueError('此 Windows 完整版本尚未验证消息方向，不能生成恢复候选')
+    if not is_windows_42_version(value.get('file_version')):
+        raise ValueError('Windows 恢复目前仅接受 4.2.x.x 完整版本的取钥回执')
+    # Preserve the structured profile identifier and per-message validation.
     return WINDOWS_STRUCTURED_PROFILE
 
 

@@ -65,7 +65,7 @@ public class Wizard : Window {
         var bottom=new StackPanel{Margin=new Thickness(23,20,15,25)};
         bottom.Children.Add(Link("一步一步使用指南",delegate { MessageBox.Show(this,"1. 检查环境并选择腾讯原版微信。\n2. 先打开 A，本人登录并读取核验。正常退出微信后再打开 B，登录后将手机 B 中与 A 的聊天导入电脑 B（已完整存在则直接核对），确认后读取 B。\n3. 两个账号核验完成、微信正常退出后生成预览。已有密钥可退出后直接读取验证。\n4. 核对昵称、数量、方向，确认后才应用。\n5. 在原版微信核对显示；手机迁移单独验收。\n\n遇到冲突或空白账号未初始化时停止，保留原件，不删除聊天。","使用指南"); }));
         bottom.Children.Add(Link("载入隔离测试报告",LoadSimulation));
-        bottom.Children.Add(Text("0.5.1 · Windows 实验版",11,muted));
+        bottom.Children.Add(Text("0.5.2 · Windows 实验版",11,muted));
         bottom.Children.Add(Link("开源许可",delegate{OpenDirectory(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"licenses"));}));DockPanel.SetDock(bottom,Dock.Bottom); side.Children.Add(bottom);
         nav=new StackPanel{Margin=new Thickness(12,0,12,0)}; side.Children.Add(nav);
         for(int i=0;i<5;i++){int index=i; steps[i]=Button((i+1)+"   "+titles[i],delegate{step=index;Render();});steps[i].HorizontalContentAlignment=HorizontalAlignment.Left;steps[i].Margin=new Thickness(0,0,0,10);steps[i].Padding=new Thickness(16,15,8,15); nav.Children.Add(steps[i]);}
@@ -116,7 +116,7 @@ public class Wizard : Window {
         var buttons=Row(card);buttons.Children.Add(Button("选择微信程序",delegate{var f=new OpenFileDialog{Filter="微信程序|Weixin.exe;WeChat.exe"};if(f.ShowDialog(this)==true){executable=f.FileName;prepared=false;InvalidatePlan();Render();}}));
         buttons.Children.Add(Button(prepared?"重新检查":"自动检查并准备",delegate{Run("正在验证版本与腾讯签名…",D("action","prepare","executable",executable),delegate(Dictionary<string,object> r){prepared=B(Obj(Get(r,"doctor")),"ready");SetStatus(prepared?"准备完成。原版微信签名有效，下一步登录两个账号。":"环境依赖未就绪，请查看检查项目。",!prepared);Render();});},true));
         var next=Button("下一步：登录两个账号 →",delegate{step=1;Render();},true);next.IsEnabled=prepared;Row(card).Children.Add(next);
-        var note=Card(page);Heading(note,"与 Mac 相同的五步流程");Para(note,"Windows 每次只打开一个原版微信：先 A，核验并正常退出后再 B。扫码与手机确认由本人完成；读取后显示真实昵称，确认预览后才应用。");Para(note,"当前取钥面向 4.2.0.x x64。完全空白账号缺少消息身份映射时会停止生成计划，不删除记录，也不会显示为恢复成功。");
+        var note=Card(page);Heading(note,"与 Mac 相同的五步流程");Para(note,"Windows 每次只打开一个原版微信：先 A，核验并正常退出后再 B。扫码与手机确认由本人完成；读取后显示真实昵称，确认预览后才应用。");Para(note,"当前取钥接受 4.2.x.x x64，保留逐条方向校验；实机证据仍仅覆盖 4.2.0.12。完全空白账号缺少消息身份映射时会停止生成计划，不删除记录，也不会显示为恢复成功。");
     }
 
     void AccountCard(int index,Panel parent){
@@ -135,6 +135,7 @@ public class Wizard : Window {
             history.Click+=delegate{sourceImport.Confirm(history.IsChecked==true);InvalidatePlan();Render();};card.Children.Add(history);
         }
         var actions=Row(card);actions.Children.Add(Button("导入已有密钥",delegate{var f=new OpenFileDialog{Filter="私有密钥清单|*.json"};if(f.ShowDialog(this)==true){accounts[index]["keys"]=f.FileName;accountVerified[0]=accountVerified[1]=false;sourceImport.Reset();InvalidatePlan();Render();}}));
+        Para(card,"导入已有密钥时，请保留同目录的配套取钥回执，例如 keys.json 与 keys.capture.json；缺少回执可能导致预览方向校验失败。");
         var read=Button("读取账号 "+slot,delegate{Run("正在核验账号 "+slot+"：已登录时取钥，已退出时验证已有密钥…",D("action","capture","slot",slot,"account",accounts[index],"identity_confirmed",identityConfirmed,"source_history_confirmed",sourceImport.Confirmed,"executable",executable),delegate(Dictionary<string,object> r){accounts[index]=Obj(Get(r,"account"));accountVerified[index]=true;if(index==0){accountVerified[1]=false;sourceImport.Reset();}InvalidatePlan();SetStatus(index==0?"A 已核验："+AccountName(0)+"。请从微信菜单正常退出，再打开 B，导入并核对手机 B 中与 A 的聊天。":"B 已核验："+AccountName(1)+"。请正常退出微信，再生成双方补齐预览。");Render();});},true);read.IsEnabled=identityConfirmed && S(accounts[index],"root").Length>0 && sourceImport.CanRead(slot,accountVerified[0]);actions.Children.Add(read);
     }
 

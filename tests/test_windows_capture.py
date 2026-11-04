@@ -83,7 +83,7 @@ class NativeTests(unittest.TestCase):
         import shutil
         with tempfile.TemporaryDirectory() as tmp:
             exe = Path(tmp) / 'Weixin.exe'; shutil.copy2(sys.executable, exe)
-            with self.assertRaisesRegex(ValueError, '4.2.0'):
+            with self.assertRaisesRegex(ValueError, '4.2.x.x'):
                 capture.app_info(exe)
 
 

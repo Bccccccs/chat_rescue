@@ -327,7 +327,7 @@ def main():
     except (OSError, ValueError, RuntimeError, KeyError) as error:
         detail = str(error)
         if 'packed direction is not the expected opposite perspective' in detail:
-            detail = '消息收发方向与已核验版本不匹配，本次未应用。请保留任务目录，核对 Windows 取钥回执与完整版本。'
+            detail = '消息收发方向与所用方向配置不匹配，本次未应用。请核对密钥旁的同名 .capture.json 回执及旧导出配置；若回执完整，仍需检查消息方向兼容性。请保留任务目录。'
         elif 'Windows 4.2.0.12 currently supports verified text directions only' in detail:
             detail = 'Windows 4.2.0.12 当前仅核验了文本消息方向；所选会话含尚未验证的类型，本次未应用。'
         response = {'ok': False, 'error': detail}

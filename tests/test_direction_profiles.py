@@ -6,6 +6,7 @@ import unittest
 from chat_rescue.workflow import (WINDOWS_TEXT_PROFILE, WINDOWS_STRUCTURED_PROFILE, LEGACY_PROFILE, flip_packed, private_json,
                                   prepare_plain_restore, save_chat, table_for, connect)
 from chat_rescue.operations import capture_direction_profile
+from chat_rescue.windows_version import is_windows_42_version
 from test_workflow import fixture, db, A, B
 
 
@@ -91,7 +92,7 @@ class DirectionProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unsupported message direction profile'):
             save_chat(self.source, B, A, self.root / 'bundle2')
 
-    def test_capture_receipt_must_bind_owner_root_and_exact_version(self):
+    def test_capture_receipt_must_bind_owner_root_and_42_version(self):
         root = self.root / B / 'db_storage'; root.parent.mkdir(parents=True); fixture(root, True)
         keys = self.root / 'keys.json'
         self.assertEqual(capture_direction_profile(root, keys), LEGACY_PROFILE)
@@ -99,8 +100,30 @@ class DirectionProfileTests(unittest.TestCase):
         valid = {'state': 'verified', 'verified_required_databases': 4, 'database_root': str(root),
                  'owner': B, 'file_version': '4.2.0.12'}
         for change in ({'owner': A}, {'database_root': str(self.target)}, {'state': 'partial'},
-                       {'verified_required_databases': 3}, {'file_version': '4.2.0.99'}):
+                       {'verified_required_databases': 3}, {'file_version': '4.1.9.99'},
+                       {'file_version': '4.3.0.12'}, {'file_version': '4.2'}, {'file_version': None}):
             receipt.write_text(json.dumps({**valid, **change}), encoding='utf-8')
             with self.assertRaises(ValueError): capture_direction_profile(root, keys)
-        receipt.write_text(json.dumps(valid), encoding='utf-8')
-        self.assertEqual(capture_direction_profile(root, keys), WINDOWS_STRUCTURED_PROFILE)
+        for version in ('4.2.0.12', '4.2.0.99', '4.2.1.0', '4.2.99.123'):
+            with self.subTest(version=version):
+                receipt.write_text(json.dumps({**valid, 'file_version': version}), encoding='utf-8')
+                self.assertEqual(capture_direction_profile(root, keys), WINDOWS_STRUCTURED_PROFILE)
+
+    def test_complete_42_versions_only(self):
+        for version in ('4.2.0.0', '4.2.0.12', '4.2.1.25', '4.2.99.999'):
+            with self.subTest(version=version):
+                self.assertTrue(is_windows_42_version(version))
+        for version in (None, 4.2, '', '4.2', '4.2.0', '4.2.0.12beta',
+                        '4.2.0.12\n', '4.20.0.12', '4.3.0.12', '5.2.0.12'):
+            with self.subTest(version=version):
+                self.assertFalse(is_windows_42_version(version))
+
+    def test_old_windows_export_without_profile_reproduces_direction_error(self):
+        self.windows_source()
+        (self.source / 'direction-profile.json').unlink()
+        with self.assertRaisesRegex(ValueError, 'opposite perspective'):
+            save_chat(self.source, B, A, self.root / 'old-bundle')
+        private_json(self.source / 'direction-profile.json', {'direction_profile': WINDOWS_TEXT_PROFILE})
+        bundle = self.root / 'new-bundle'
+        save_chat(self.source, B, A, bundle)
+        self.assertEqual(prepare_plain_restore(bundle, self.target, A, self.root / 'restored')['added'], 2)

@@ -48,7 +48,12 @@ class InventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '不受支持'):
             message_shards(self.root)
         (self.root / 'message/message_01.db').unlink()
-        (self.root / 'message/message_1.db').symlink_to(self.root / 'message/message_0.db')
+        try:
+            (self.root / 'message/message_1.db').symlink_to(self.root / 'message/message_0.db')
+        except OSError as error:
+            if getattr(error, 'winerror', None) == 1314:
+                self.skipTest('Windows symlink privilege unavailable; exercised on macOS CI')
+            raise
         with self.assertRaisesRegex(ValueError, '不受支持'):
             message_shards(self.root)
 
