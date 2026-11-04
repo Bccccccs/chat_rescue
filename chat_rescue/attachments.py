@@ -588,7 +588,7 @@ class Transaction:
             if h is not None:
                 dest=path_at(self.directory/'original-assets',rel);dest.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
                 shutil.copy2(path_at(self.root,rel),dest);dest.chmod(0o600)
-                with dest.open('rb') as f:os.fsync(f.fileno())
+                with dest.open('rb+') as f:os.fsync(f.fileno())
                 sync_directory(dest.parent)
                 if digest(dest)!=h:raise ValueError('附件原件备份改变')
         for rel,h in self.asset['candidates'].items():
@@ -685,7 +685,7 @@ class UndoTransaction:
             live=path_at(root,rel);backup=path_at(self.backup/slot/'_assets',rel)
             backup.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
             shutil.copy2(live,backup);backup.chmod(0o600)
-            with backup.open('rb') as f:os.fsync(f.fileno())
+            with backup.open('rb+') as f:os.fsync(f.fileno())
             from .operations import sync_directory
             sync_directory(backup.parent)
             if digest(backup)!=self.result['accounts'][slot]['assets_after'][rel]:raise ValueError('撤回前附件备份改变')

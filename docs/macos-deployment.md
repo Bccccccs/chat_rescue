@@ -3,8 +3,8 @@
 ## 在另一台 Mac 安装
 
 1. 确认是 Apple 芯片 M 系列、macOS 14 或以上。本机实测 macOS 27.0；Intel Mac 不适用此 arm64 包。
-2. 打开 [Mac 0.3.7 下载页](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.3.7)，在 Assets 下载 `Chat-Rescue-0.3.7-macOS-arm64.zip`，不要选源码压缩包或 Windows 文件。
-3. 解压，将 `Chat Rescue.app` 拖入“应用程序”，再从这里打开。版本号应显示 0.3.7。
+2. 打开 [Mac 0.5.0 下载页](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.0)，在 Assets 下载 `Chat-Rescue-0.5.0-macOS-arm64.zip`，不要选源码压缩包或 Windows 文件。
+3. 解压，将 `Chat Rescue.app` 拖入“应用程序”，再从这里打开。版本号应显示 0.5.0。
 4. 微信须为当前已验证的 4.1.13。其他版本不要直接继续，也不要为了适配覆盖或删除现有聊天资料。
 5. 软件内置 Python 和 SQLCipher，无需安装 Homebrew。取钥需要 Apple 命令行工具：若软件提示缺少，在“终端”执行 `xcode-select --install`，按系统界面完成安装；安装过的不必重复。
 6. 正常退出原版微信。从 Chat Rescue 的“自动检查并准备”开始；准备结束按页面给出的本机路径，为 Chat Rescue、Terminal、微信 A 和微信 B 开启完全磁盘访问权限。系统如提示 Terminal 的开发者工具授权，按提示操作。每台 Mac 需独立授权。
@@ -12,7 +12,7 @@
 
 应用尚未完成 Apple 公证。若提示无法验证开发者，先确认下载自上述发布页，再按 [Apple 官方说明](https://support.apple.com/zh-cn/102445)在“系统设置 → 隐私与安全性”处理“仍要打开”。若提示恶意软件或文件损坏，保留提示排查，不关闭系统保护。
 
-可选下载校验：同页下载 `SHA256SUMS.txt`，在下载目录运行 `shasum -a 256 Chat-Rescue-0.3.7-macOS-arm64.zip`，结果应与文件一致。
+可选下载校验：同页下载 `SHA256SUMS.txt`，在下载目录运行 `shasum -a 256 Chat-Rescue-0.5.0-macOS-arm64.zip`，结果应与文件一致。
 
 ## 传到另一台电脑时传什么
 

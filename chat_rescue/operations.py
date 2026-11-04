@@ -246,7 +246,7 @@ def apply_plan(directory):
                 q.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(root / rel, q)
                 q.chmod(0o600)
-                with q.open('rb') as f:
+                with q.open('rb+') as f:
                     os.fsync(f.fileno())
                 sync_directory(q.parent)
                 if digest(q) != h:
