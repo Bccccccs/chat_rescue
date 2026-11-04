@@ -76,10 +76,10 @@ class EncryptedInspectionTests(unittest.TestCase):
     def test_verify_export_and_inspect_every_shard(self):
         rel = self.extra_shard()
         root, keys = self.source
-        before = ops.state(root)
         with patch.object(ops.platform, 'system', return_value='Darwin'), \
              patch.object(cli, 'supported_host'), patch.object(cli, 'ensure_closed'), \
              patch.object(ops, 'ensure_closed'):
+            before = ops.state(root)
             result = cli.verify_keys(root, keys)
             self.assertEqual(result['verified_required_databases'], 5)
             self.assertIn(rel, result['verified_databases'])
@@ -95,7 +95,7 @@ class EncryptedInspectionTests(unittest.TestCase):
             self.assertFalse(view['recovery_supported'])
             with self.assertRaisesRegex(ValueError, '恢复写入仅支持'):
                 save_chat(self.root / 'export', B, A, self.root / 'bundle')
-        self.assertEqual(ops.state(root), before)
+            self.assertEqual(ops.state(root), before)
 
     def test_missing_extra_key_never_passes_verification(self):
         rel = self.extra_shard(); root, keys = self.source
