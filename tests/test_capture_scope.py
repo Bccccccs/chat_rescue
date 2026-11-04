@@ -5,7 +5,7 @@ from unittest.mock import patch
 import test_cli
 from test_workflow import B
 from chat_rescue import __main__ as cli
-from chat_rescue.operations import ALL
+from chat_rescue.operations import ALL, inspection_files
 from chat_rescue.workflow import private_json,digest
 
 class CaptureScopeTests(unittest.TestCase):
@@ -26,9 +26,9 @@ class CaptureScopeTests(unittest.TestCase):
         def provider(args,**kwargs):
             if args[0]=='/usr/bin/python3':
                 original_keys=json.loads(self.source[1].read_text())['keys']
-                private_json(output,{'keys':{str((self.source[0]/rel).relative_to(self.root)):original_keys[rel] for rel in ALL[:required_count]}})
+                private_json(output,{'keys':{str((self.source[0]/rel).relative_to(self.root)):original_keys[rel] for rel in inspection_files(self.source[0])[:required_count]}})
                 groups=json.loads(Path(args[args.index('--completion-groups')+1]).read_text())
-                self.assertEqual(len(groups),2);self.assertTrue(all(len(group)==4 for group in groups))
+                self.assertEqual(groups, [[str((candidate/rel).relative_to(self.root)) for rel in inspection_files(candidate)] for candidate in (self.target[0], self.source[0])])
             return subprocess.CompletedProcess(args,0)
         with patch.object(cli,'app_info',side_effect=app_info),patch.object(cli,'run',side_effect=system),patch.object(cli,'ensure_closed'),patch.object(cli,'mac_only'),patch.object(cli.subprocess,'run',side_effect=provider):
             return cli.capture(args)

@@ -10,7 +10,7 @@ import sqlite3
 import sys
 from . import __version__
 from .workflow import save_chat, connect, digest, private_json
-from .operations import ALL, mac_only, ensure_closed, check_owner, export_root, make_plan, apply_plan
+from .operations import files_for, inspection_files, ALL, mac_only, ensure_closed, check_owner, export_root, make_plan, apply_plan
 from .vendor.sqlcipher_probe import library, load_key, DB
 from .runtime import supported_host
 
@@ -95,15 +95,23 @@ def capture(args):
         raise FileExistsError('密钥输出已存在；选择新文件名')
     output.parent.mkdir(parents=True, exist_ok=True)
     root = Path(args.db_root).resolve(strict=True)
+    include_voice = getattr(args, 'include_voice', False)
+    if include_voice:
+        from .voice import single_media
     database_roots = [Path(p).resolve(strict=True) for p in getattr(args, 'db_roots', None) or [root]]
+    required_by_root = {}
     for candidate in database_roots:
         if not candidate.is_relative_to(root):
             raise ValueError('账号候选必须位于本次选定的微信目录内')
-        for rel in ALL:
+        if include_voice:
+            single_media(candidate)
+        required = inspection_files(candidate, include_voice)
+        required_by_root[candidate] = required
+        for rel in required:
             if not (candidate / rel).is_file():
                 raise ValueError('请先登录微信并等待本地记录建立：' + rel)
     groups = output.parent / 'capture-groups.json'
-    private_json(groups, [[str((candidate/rel).relative_to(root)) for rel in ALL] for candidate in database_roots])
+    private_json(groups, [[str((candidate/rel).relative_to(root)) for rel in required_by_root[candidate]] for candidate in database_roots])
     env = dict(os.environ, PYTHONPATH=run(['/usr/bin/lldb', '-P']).strip())
     print('副本启动后登录本次账号并完成手机确认；验证结束会关闭本次副本。密钥不会输出到终端。', flush=True)
     try:
@@ -120,25 +128,34 @@ def capture(args):
     if result.returncode:
         raise RuntimeError('取钥未完成，请按故障处理文档检查权限和副本登录状态')
     verified_roots = []
+    verified_databases = {}
     for candidate in database_roots:
         try:
-            for rel in ALL:
+            required = required_by_root[candidate]
+            if inspection_files(candidate, include_voice) != required:
+                raise ValueError('取钥期间消息分片清单改变，请重新读取')
+            for rel in required:
                 with DB(candidate / rel, load_key(output, candidate / rel)) as d:
-                    d.query('SELECT count(*) FROM sqlite_master')
+                    if d.query('PRAGMA integrity_check;') != [{'integrity_check': 'ok'}]:
+                        raise ValueError('必要数据库完整性失败：' + rel)
             import re
             from .cipher import literal
             owner = re.sub(r'_[0-9a-fA-F]{4}$', '', candidate.parent.name)
             with DB(candidate/'contact/contact.db', load_key(output, candidate/'contact/contact.db')) as d:
                 rows = d.query('SELECT username,nick_name FROM contact WHERE username=' + literal(owner))
             if len(rows) == 1:
+                if inspection_files(candidate, include_voice) != required:
+                    raise ValueError('验证期间消息分片清单改变，请重新读取')
                 verified_roots.append({'root':str(candidate),'owner':owner,'nickname':rows[0]['nick_name'] or '昵称未设置'})
+                verified_databases[str(candidate)] = list(required)
         except (RuntimeError, ValueError, KeyError):
             continue
     if not verified_roots:
-        raise RuntimeError('尚未完成任何账号的四库及本人身份验证，请检查登录与权限')
-    return {'keys': str(output), 'verified_required_databases': len(ALL),
+        raise RuntimeError('尚未完成任何账号的必要数据库及本人身份验证，请检查登录与权限')
+    return {'keys': str(output), 'verified_required_databases': max(map(len, verified_databases.values())),
+            'verified_databases': verified_databases,
             'accounts':verified_roots,
-            'instruction': '四个必要数据库验证通过；副本已关闭。导出前保持微信退出。'}
+            'instruction': '必要数据库验证通过；副本已关闭。导出前保持微信退出。'}
 
 
 def contacts(root, query):
@@ -194,7 +211,16 @@ def doctor():
             run(['/usr/bin/lldb', '-P']); checks['apple_lldb'] = True
         except (RuntimeError, OSError):
             checks['apple_lldb'] = False
-    return {'version': __version__, 'checks': checks, 'ready': all(checks.values()),
+    crypto_ready = False
+    if host and not windows and checks['sqlcipher']:
+        try:
+            from .attachments import aes
+            sample = b'chat-rescue-private-self-test'
+            key = b'0123456789abcdef'
+            crypto_ready = aes(aes(sample,key,True),key,False) == sample
+        except (ValueError,RuntimeError,OSError):
+            pass
+    return {'version': __version__, 'attachment_crypto_ready': crypto_ready, 'checks': checks, 'ready': all(checks.values()),
             'supported_wechat': 'Windows: 未完成客户端实测，仅接受兼容四库结构与 SQLCipher 4' if windows else '4.1.13',
             'key_capture_available': not windows and host,
             'experimental_windows_capture_available': windows and host,
@@ -202,17 +228,25 @@ def doctor():
             'instruction': 'Windows ready 仅指离线依赖就绪；需要本人授权的已有密钥文件，先运行 verify-keys。' if windows else '失败项见 README；系统权限需首次取钥时验证。'}
 
 
-def verify_keys(root, keys):
+def verify_keys(root, keys, *, include_voice=False):
     supported_host(); ensure_closed()
     root = Path(root).resolve(strict=True)
-    from .workflow import _single_shard
-    _single_shard(root)
-    for rel in ALL:
+    if include_voice:
+        if platform.system() == 'Windows':
+            raise ValueError('Windows 语音恢复尚未适配')
+        from .voice import single_media
+        single_media(root)
+    required = inspection_files(root, include_voice)
+    from .operations import state
+    before = state(root, include_voice)
+    for rel in required:
         with DB(root / rel, load_key(keys, root / rel)) as database:
             if database.query('PRAGMA integrity_check;') != [{'integrity_check': 'ok'}]:
                 raise ValueError('必要数据库完整性验证失败：' + rel)
-    return {'verified_required_databases': len(ALL),
-            'instruction': '四库密钥与完整性验证通过；尚需核对双方身份与数据库结构。'}
+    if inspection_files(root, include_voice) != required or state(root, include_voice) != before:
+        raise ValueError('验证期间消息分片或数据库改变，请退出微信后重新读取')
+    return {'verified_required_databases': len(required), 'verified_databases': list(required),
+            'instruction': '必要数据库密钥与完整性验证通过；尚需核对双方身份与数据库结构。'}
 
 
 def main():
@@ -247,7 +281,13 @@ def main():
     c = commands.add_parser('save-chat'); c.add_argument('--plain-root', required=True); c.add_argument('--owner', required=True); c.add_argument('--peer', required=True); c.add_argument('--output', required=True)
     c = commands.add_parser('plan-restore'); c.add_argument('--source', required=True); c.add_argument('--target-db-root', required=True); c.add_argument('--target-keys', required=True); c.add_argument('--target-owner', required=True); c.add_argument('--output', required=True)
     c = commands.add_parser('apply'); c.add_argument('--plan', required=True)
+    for name in ('verify-keys','capture-keys','export-db','save-chat','plan-restore','plan-sync'):
+        commands.choices[name].add_argument('--include-voice', action='store_true', help='启用 Mac 语音离线实验模式；需媒体库密钥，客户端播放及手机迁移待验收')
+    for name in ('export-db','save-chat','plan-restore','plan-sync'):
+        commands.choices[name].add_argument('--include-attachments', action='store_true', help='启用Mac图片、视频和文件附件实验模式；需完整本地文件，客户端打开仍待验收')
     a = p.parse_args()
+    voice_options = {'include_voice': True} if getattr(a, 'include_voice', False) else {}
+    if getattr(a, 'include_attachments', False):voice_options['include_attachments']=True
     try:
         if a.command == 'doctor':
             result = doctor()
@@ -256,7 +296,7 @@ def main():
         elif a.command == 'init-work':
             from .operations import fresh
             result = {'workspace': str(fresh(a.output))}
-        elif a.command == 'verify-keys': result = verify_keys(a.db_root, a.keys)
+        elif a.command == 'verify-keys': result = verify_keys(a.db_root, a.keys, **voice_options)
         elif a.command == 'inspect-windows-app':
             from .windows_capture import app_info as windows_app_info
             result = windows_app_info(a.exe)
@@ -265,13 +305,13 @@ def main():
             result = windows_capture(a.pid, a.exe, a.db_root, a.owner, a.output, a.timeout)
         elif a.command == 'plan-sync':
             from .sync import make_sync_plan
-            result = make_sync_plan(*({field: getattr(a, slot + '_' + field) for field in ('root', 'keys', 'owner')} for slot in ('a', 'b')), a.output)
+            result = make_sync_plan(*({field: getattr(a, slot + '_' + field) for field in ('root', 'keys', 'owner')} for slot in ('a', 'b')), a.output, **voice_options)
         elif a.command in ('apply-sync', 'undo-sync'):
             from .sync import apply_sync_plan, undo_sync_plan
             result = (apply_sync_plan if a.command == 'apply-sync' else undo_sync_plan)(a.plan)
         elif a.command == 'prepare-key-app': result = prepare(a.app, a.output)
         elif a.command == 'capture-keys': result = capture(a)
-        elif a.command == 'export-db': result = export_root(a.db_root, a.keys, a.output)
+        elif a.command == 'export-db': result = export_root(a.db_root, a.keys, a.output, **voice_options)
         elif a.command == 'contacts': result = contacts(a.plain_root, a.query)
         elif a.command == 'save-chat':
             r = json.loads((Path(a.plain_root) / 'export-report.json').read_text(encoding='utf-8'))
@@ -280,8 +320,8 @@ def main():
                 raise ValueError('owner 与导出账号目录不匹配')
             if any(digest(Path(a.plain_root) / rel) != h for rel, h in r['exported'].items()):
                 raise ValueError('导出数据库哈希改变')
-            result = save_chat(a.plain_root, a.owner, a.peer, a.output)
-        elif a.command == 'plan-restore': result = make_plan(a.source, a.target_db_root, a.target_keys, a.target_owner, a.output)
+            result = save_chat(a.plain_root, a.owner, a.peer, a.output, **voice_options)
+        elif a.command == 'plan-restore': result = make_plan(a.source, a.target_db_root, a.target_keys, a.target_owner, a.output, **voice_options)
         else: result = apply_plan(a.plan)
         print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
     except sqlite3.Error:

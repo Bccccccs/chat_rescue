@@ -237,31 +237,66 @@ def capture_status(payload):
     result = json.loads(receipt.read_text())
     if result.get('state') == 'complete':
         output = Path(request['output'])
-        if result.get('verified_required_databases') != len(ops.ALL) or not output.is_file():
-            return {'state':'failed','error':'取钥回执未完成四库验证，请重试'}
+        verified = result.get('verified_databases')
+        if verified is not None:
+            accounts = result.get('accounts', [])
+            valid = bool(accounts) and set(verified) == {a['root'] for a in accounts}
+            try:
+                for account in accounts:
+                    valid = valid and verified.get(account['root']) == list(ops.inspection_files(account['root'], request.get('include_voice', False)))
+            except (ValueError, OSError):
+                valid = False
+        else:
+            # Legacy receipts are valid only for the original single-shard scope.
+            valid = result.get('verified_required_databases') == len(ops.files_for(request.get('include_voice', False)))
+            try:
+                for root in request.get('db_roots', []):
+                    valid = valid and ops.inspection_files(root, request.get('include_voice', False)) == ops.files_for(request.get('include_voice', False))
+            except (ValueError, OSError):
+                valid = False
+        if not valid or not output.is_file():
+            return {'state':'failed','error':'取钥回执未完成本次模式的全部必要库验证，请重试'}
         return {'state':'complete','keys':str(output),'accounts':result.get('accounts',[])}
     return {'state':'failed','error':result.get('error','取钥失败，请查看终端提示')}
 
 
-def inspect_account(account):
+def inspect_account(account, *, include_voice=False, include_attachments=False):
     root = Path(account['root']).resolve(strict=True)
     ops.check_owner(root, account['owner'])
+    from .vendor.sqlcipher_probe import load_key
+    for rel in ops.inspection_files(root):
+        try:
+            load_key(account['keys'], root / rel)
+        except (ValueError, KeyError, RuntimeError):
+            return {'requires_message_keys': True}
+    if include_voice:
+        from .voice import MEDIA
+        try:
+            load_key(account['keys'], root / MEDIA)
+        except (ValueError, KeyError, RuntimeError):
+            return {'requires_voice_keys': True}
     directory = new_job()/'plain'
-    ops.export_root(root, account['keys'], directory)
+    ops.export_root(root, account['keys'], directory, **({'include_voice':True} if include_voice else {}), **({'include_attachments':True} if include_attachments else {}))
     contacts = cli.contacts(directory, '')['contacts']
     own = next((r for r in contacts if r['username']==account['owner']), None)
     if not own:
         raise ValueError('数据库联系人中未找到本人身份')
-    rows = []
-    with connect(directory/'message/message_0.db') as c:
-        for contact in contacts:
-            peer = contact['username']
-            if peer==account['owner'] or '@' in peer: continue
-            table=table_for(peer)
-            if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone(): continue
-            types={r[0]:r[1] for r in c.execute('SELECT local_type,count(*) FROM '+ident(table)+' GROUP BY local_type')}
-            rows.append({**contact,'count':sum(types.values()),'unsupported':sum(n for t,n in types.items() if t not in SUPPORTED)})
-    return {'owner':own, 'conversations':rows, 'plain':str(directory)}
+    rows = {}
+    shards = ops.message_shards(directory)
+    for shard in shards:
+        with connect(directory/shard) as c:
+            for contact in contacts:
+                peer = contact['username']
+                if peer==account['owner'] or '@' in peer: continue
+                table=table_for(peer)
+                if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone(): continue
+                types={r[0]:r[1] for r in c.execute('SELECT local_type,count(*) FROM '+ident(table)+' GROUP BY local_type')}
+                row = rows.setdefault(peer, {**contact,'count':0,'unsupported':0,'shards':[]})
+                row['count'] += sum(types.values())
+                row['unsupported'] += sum(n for t,n in types.items() if t not in (SUPPORTED | ({34} if include_voice else set()) | ({3,43} if include_attachments else set())))
+                row['shards'].append(shard)
+    return {'owner':own, 'conversations':list(rows.values()), 'plain':str(directory),
+            'message_shards':list(shards), 'recovery_supported':len(shards)==1}
 
 
 def capture_command(request):
@@ -274,7 +309,7 @@ def capture_command(request):
     scope = os.path.commonpath(candidates)
     output=new_job()/'keys.json'
     payload=output.parent/'capture-request.json'
-    private_json(payload, {'app':str(app),'db_root':scope,'db_roots':candidates,'output':str(output), 'original_app':request['original'], 'timeout':300,'started_at':time.time()})
+    private_json(payload, {'app':str(app),'db_root':scope,'db_roots':candidates,'output':str(output), 'original_app':request['original'], 'timeout':300,'started_at':time.time(),'include_voice':request.get('include_voice',False)})
     if getattr(sys,'frozen',False):
         command=[sys.executable,'--capture',str(payload)]
     else:
@@ -311,8 +346,11 @@ def dispatch(request):
     if action=='resume':
         directory=Path(request['plan']).resolve(strict=True)
         manifest=json.loads((directory/'sync-plan.json').read_text())
-        if manifest.get('version')!=1 or set(manifest['accounts'])!={'A','B'}:
+        if manifest.get('version') not in (1,2,3) or set(manifest['accounts'])!={'A','B'}:
             raise ValueError('此目录不是受支持的双向补齐计划')
+        from .sync import sync_options
+        if manifest['version'] in (2,3):
+            sync_options(manifest)
         receipt=directory/'sync-result.json'
         state=json.loads(receipt.read_text())['state'] if receipt.exists() else 'ready'
         if (directory/'sync-started.json').exists() and not receipt.exists(): state='interrupted'
@@ -325,8 +363,8 @@ def dispatch(request):
     if action=='launch':
         return launch_slots(request['slots'])
     if action=='capture':return capture_command(request)
-    if action=='inspect':return inspect_account(request['account'])
-    if action=='plan':return make_sync_plan(request['a'],request['b'],new_job()/'sync')
+    if action=='inspect':return inspect_account(request['account'], **({'include_voice': True} if request.get('include_voice') else {}), **({'include_attachments': True} if request.get('include_attachments') else {}))
+    if action=='plan':return make_sync_plan(request['a'],request['b'],new_job()/'sync', **({'include_voice': True} if request.get('include_voice') else {}), **({'include_attachments': True} if request.get('include_attachments') else {}))
     if action=='apply':return apply_sync_plan(request['plan'])
     if action=='undo':return undo_sync_plan(request['plan'])
     raise ValueError('不支持的桌面操作')
@@ -368,7 +406,7 @@ def main():
             except Exception:
                 private_json(Path(args.capture).parent/'capture-result.json', {'state':'failed','error':'取钥未完成，请检查终端中的权限、退出状态和登录提示'})
                 raise
-            private_json(Path(args.capture).parent/'capture-result.json', {'state':'complete','verified_required_databases':result['verified_required_databases'],'accounts':result['accounts']})
+            private_json(Path(args.capture).parent/'capture-result.json', {'state':'complete','verified_required_databases':result['verified_required_databases'],'verified_databases':result['verified_databases'],'accounts':result['accounts']})
         else:
             result=dispatch(json.load(sys.stdin))
         print(json.dumps({'ok':True,'result':result},ensure_ascii=False));return 0
