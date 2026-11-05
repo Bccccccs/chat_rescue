@@ -2,6 +2,7 @@
 from .runtime import exclusive_lock, supported_host
 import json
 import os
+import platform
 import shutil
 import uuid
 from pathlib import Path
@@ -11,6 +12,7 @@ from . import attachments as att
 from .cipher import encrypt_database
 from .workflow import RELS, connect, table_for, ident, save_chat, prepare_plain_restore, private_json, digest
 from .shards import message_rels, mutable_rels, database_rels, validate_plan_files, check_paths
+from .media import windows_options
 
 
 def conversation_count(plain, peer):
@@ -24,6 +26,8 @@ def conversation_count(plain, peer):
 
 
 def make_sync_plan(a, b, output, *, include_voice=False, include_attachments=False):
+    if platform.system()=='Windows' and (include_voice or include_attachments):
+        raise ValueError('Windows 媒体仅提供 B→A 替换，请使用 plan-replace 或桌面实验开关')
     supported_host(); ops.ensure_closed()
     if a['owner'] == b['owner'] or Path(a['root']).resolve() == Path(b['root']).resolve():
         raise ValueError('请选择两个不同账号与独立的账号目录')
@@ -126,7 +130,7 @@ def apply_sync_plan(output):
         if (output/'sync-started.json').exists():
             raise ValueError('此计划已尝试应用，请查看回执；不要重复执行')
         manifest = json.loads((output/'sync-plan.json').read_text(encoding='utf-8'))
-        if manifest.get('version') not in (1,2,3,4) or set(manifest.get('accounts', {})) != {'A','B'}:
+        if manifest.get('version') not in (1,2,3,4,5) or set(manifest.get('accounts', {})) != {'A','B'}:
             raise ValueError('双向计划结构不受支持')
         voice_options = sync_options(manifest)
         a, b = manifest['accounts']['A'], manifest['accounts']['B']
@@ -147,9 +151,11 @@ def apply_sync_plan(output):
                 if plan['target_root'] != account['root'] or plan['target_owner'] != account['owner'] or plan['originals'] != manifest['originals'][slot]:
                     raise ValueError('单向计划与双向身份或快照不一致')
                 ops.plan_sets(plan)
-                expected_version = 1 if manifest.get('mode') == 'replace-a-from-b' else manifest['version']
+                expected_version = 1 if manifest.get('mode') == 'replace-a-from-b' and manifest['version']==4 else manifest['version']
                 if plan['version'] != expected_version or (directory/'apply-started.json').exists():
                     raise ValueError('单向计划不可应用')
+                if manifest['version']==5 and plan.get('capabilities')!=manifest['capabilities'][:-2]:
+                    raise ValueError('协调清单与 A 媒体能力不一致')
                 for rel, value in plan['candidates'].items():
                     if digest(ops.protected_path(directory/'candidates', rel)) != value:
                         raise ValueError('候选改变；双方均未应用')
@@ -163,7 +169,7 @@ def apply_sync_plan(output):
                 else:
                     result['accounts'][slot] = {'state':'unchanged', 'added':0}
                 result['accounts'][slot]['after'] = ops.state(manifest['accounts'][slot]['root'], **voice_options)
-                if manifest['version']==3:
+                if 'original_assets' in manifest:
                     root=Path(manifest['accounts'][slot]['root']).parent
                     result['accounts'][slot]['assets_after']={rel:att.file_hash(root,rel) for rel in manifest['original_assets'][slot]}
         except BaseException:
@@ -207,7 +213,7 @@ def undo_sync_plan(output):
                     raise ValueError('撤回原件校验失败')
         undo=ops.fresh(output/('before-undo-'+uuid.uuid4().hex))
         staged=[];changed=[]
-        attachment_undo=att.UndoTransaction(output,manifest,result,undo) if manifest['version']==3 else None
+        attachment_undo=att.UndoTransaction(output,manifest,result,undo) if 'original_assets' in manifest else None
         try:
             if attachment_undo:attachment_undo.stage()
             for slot,account in manifest['accounts'].items():
@@ -259,8 +265,15 @@ def undo_sync_plan(output):
 
 def sync_options(manifest):
     version=manifest.get('version');caps=manifest.get('capabilities',[])
-    voice=version==2 or (version==3 and CAPABILITY in caps)
-    if (version not in (1,2,3,4)
+    if (version in (2,3) and platform.system()=='Windows') or (version==5 and platform.system()!='Windows'):
+        raise ValueError('媒体协调计划的平台不匹配')
+    windows=None
+    if version==5:
+        windows=windows_options({**manifest,'capabilities':caps[:-2]})
+        if caps[-2:]!=['windows-single-chat-replacement','windows-verified-shard-routing']:
+            raise ValueError('Windows 媒体必须使用已验证分片的 B→A 替换')
+    voice=windows['include_voice'] if windows else version==2 or (version==3 and CAPABILITY in caps)
+    if (version not in (1,2,3,4,5)
             or set(manifest.get('accounts', {}))!={'A','B'}
             or set(manifest.get('directions', {}))!={'A','B'}
             or set(manifest.get('originals', {}))!={'A','B'}
@@ -268,10 +281,11 @@ def sync_options(manifest):
             or (version==3 and caps!=([CAPABILITY] if voice else [])+[att.CAPABILITY])):
         raise ValueError('双向计划结构不受支持')
     a,b = manifest['accounts']['A'],manifest['accounts']['B']
-    if version == 4 or manifest.get('mode') == 'replace-a-from-b':
-        if (version != 4 or manifest.get('mode') != 'replace-a-from-b'
-                or caps not in (['windows-single-chat-replacement'],
+    if version in (4,5) or manifest.get('mode') == 'replace-a-from-b':
+        if (version not in (4,5) or manifest.get('mode') != 'replace-a-from-b'
+                or (version==4 and caps not in (['windows-single-chat-replacement'],
                                 ['windows-single-chat-replacement','windows-verified-shard-routing'])
+                    )
                 or manifest['directions']['B']['plan'] is not None
                 or manifest['directions']['B'].get('added') != 0
                 or not manifest['directions']['A']['plan']):
@@ -288,10 +302,12 @@ def sync_options(manifest):
         allowed={r+suffix for r in ops.inspection_files(account['root'],voice) for suffix in ('','-wal','-shm')}
         if set(manifest['originals'][slot]) != allowed:
             raise ValueError('双向原件路径不受支持')
-    if version==3:
+    if version==3 or (windows and windows['include_attachments']):
         if set(manifest.get('original_assets',{}))!={'A','B'}:raise ValueError('双向附件原件清单缺失')
         for state in manifest['original_assets'].values():
             for rel,h in state.items():
                 att.validate_path(rel)
                 if h is not None and (not isinstance(h,str) or len(h)!=64):raise ValueError('附件快照哈希无效')
+    elif 'original_assets' in manifest:
+        raise ValueError('未启用附件能力的计划不能携带附件写入')
     return {'include_voice':True} if voice else {}

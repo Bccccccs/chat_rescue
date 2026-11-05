@@ -25,7 +25,8 @@ DAT1, DAT2 = b'\x07\x08V1\x08\x07', b'\x07\x08V2\x08\x07'
 def filename(name):
     if (not isinstance(name, str) or not name or name in ('.', '..')
             or len(name.encode('utf-8')) > 240 or any(ord(c) < 32 for c in name)
-            or any(c in name for c in '/\\:\x00')):
+            or any(c in name for c in '/\\:\x00<>"|?*') or name.endswith((' ', '.'))
+            or re.fullmatch(r'(?i:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])', name.split('.')[0])):
         raise ValueError('附件文件名不安全')
     return name
 
@@ -53,11 +54,11 @@ def validate_path(relative):
 def path_at(root, relative):
     validate_path(relative)
     p = Path(root)
-    if p.is_symlink():
+    if p.is_symlink() or p.is_junction():
         raise ValueError('附件根目录不能是符号链接')
     for part in PurePosixPath(relative).parts:
         p = p / part
-        if p.is_symlink():
+        if p.is_symlink() or p.is_junction():
             raise ValueError('附件文件或父目录不能是符号链接')
     if p.exists() and not p.is_file():
         raise ValueError('附件目的地不是普通文件')
@@ -89,6 +90,11 @@ def read_file(root, relative):
 
 def aes(data, key, encrypt):
     """Use the OpenSSL provider already linked by the bundled SQLCipher library."""
+    if not isinstance(data, bytes) or not isinstance(key, bytes) or len(key) != 16 or len(data) > MAX_FILE:
+        raise ValueError('DAT加密参数无效')
+    if os.name == 'nt':
+        from .windows_crypto import aes_ecb
+        return aes_ecb(data, key, encrypt)
     from .vendor.sqlcipher_probe import library
     lib = library()
     specs = {
@@ -444,6 +450,7 @@ def read_entries(bundle,data):
 
 def prepare(bundle,data,target_plain,target_assets,target_owner,output):
     from .workflow import connect,table_for,digest
+    from .shards import message_rels
     if Path(output).resolve().is_relative_to(Path(target_assets).resolve()):
         raise ValueError('附件候选必须位于微信账号目录之外')
     entries=read_entries(bundle,data);context=Images(target_assets,target_owner)
@@ -453,10 +460,13 @@ def prepare(bundle,data,target_plain,target_assets,target_owner,output):
         if sid not in entries:continue
         entry,files=entries[sid];peer=data['owner']
         existing=None
-        with connect(Path(target_plain)/'message/message_0.db') as c:
-            table=table_for(peer)
-            if c.execute('SELECT 1 FROM sqlite_master WHERE name=?',(table,)).fetchone():
-                existing=c.execute('SELECT * FROM "'+table+'" WHERE server_id=?',(sid,)).fetchone()
+        for rel in message_rels(target_plain):
+            with connect(Path(target_plain)/rel) as c:
+                table=table_for(peer)
+                if c.execute('SELECT 1 FROM sqlite_master WHERE name=?',(table,)).fetchone():
+                    found=c.execute('SELECT * FROM "'+table+'" WHERE server_id=?',(sid,)).fetchall()
+                    if len(found)>1 or (found and existing):raise ValueError('附件消息跨分片匹配多义')
+                    if found:existing=found[0]
         if existing and (existing['status']!=3 or existing['upload_status']!=0):raise ValueError('目标附件消息状态尚未适配')
         if not files:
             if not existing:raise ValueError('源附件缺失且目标没有完整对应消息')
@@ -525,6 +535,8 @@ def validate_plan(plan):
         if parts[:2]==('msg','attach') and (len(parts)!=6 or parts[2]!=hashlib.md5(peer.encode()).hexdigest()):
             raise ValueError('图片候选目录与目标会话不一致')
     for mapping in (asset['originals'],asset['candidates']):
+        if os.name=='nt' and len({rel.casefold() for rel in mapping})!=len(mapping):
+            raise ValueError('附件计划存在 Windows 大小写路径冲突')
         for rel,h in mapping.items():
             validate_path(rel)
             if h is not None and (not isinstance(h,str) or not re.fullmatch('[0-9a-f]{64}',h)):
@@ -642,7 +654,7 @@ class Transaction:
 
 
 def sync_preflight(manifest, output):
-    if manifest.get('version')!=3:return
+    if manifest.get('version')!=3 and not (manifest.get('version')==5 and 'original_assets' in manifest):return
     if set(manifest.get('original_assets',{}))!={'A','B'}:raise ValueError('双向附件快照缺失')
     for slot,account in manifest['accounts'].items():
         expected=manifest['original_assets'][slot]
@@ -651,7 +663,9 @@ def sync_preflight(manifest, output):
         if manifest['directions'][slot]['plan']:
             directory=Path(output)/(slot+'-plan')
             plan=json.loads((directory/'plan.json').read_text())
-            preflight(plan,directory)
+            asset=preflight(plan,directory)
+            if any(rel not in expected or expected[rel]!=h for rel,h in asset['originals'].items()):
+                raise ValueError('协调清单与附件原件依赖不一致')
             if any(expected.get(rel,'missing')!=h for rel,h in plan['assets']['originals'].items()):
                 raise ValueError('单向附件与双向快照不一致')
 

@@ -20,6 +20,8 @@ PYTHON_URL = 'https://www.python.org/ftp/python/3.14.10/python-3.14.10-embed-amd
 PYTHON_SHA256 = '90905e64a840557d8c1bc4f5b74db3d7ee85e3ffb217611cac1c7813acea4159'
 CIPHER_URL = 'https://api.nuget.org/v3-flatcontainer/sqlitepclraw.lib.e_sqlcipher/2.1.11/sqlitepclraw.lib.e_sqlcipher.2.1.11.nupkg'
 CIPHER_SHA256 = '461ef5dd142784b44b22662f853dd5de7a2d28e9c98e0165f26733d81a355696'
+TZDATA_URL = 'https://files.pythonhosted.org/packages/5c/23/c7abc0ca0a1526a0774eca151daeb8de62ec457e77262b66b359c3c7679e/tzdata-2025.2-py2.py3-none-any.whl'
+TZDATA_SHA256 = '1a403fada01ff9221ca8044d701868fa132215d84beb92242d9acd2147f667a8'
 
 
 def sha256(path):
@@ -46,6 +48,29 @@ def write_config(payload):
     config = {'python': r'runtime\python.exe', 'sqlcipher': r'runtime\e_sqlcipher.dll',
               'repository': 'app', 'executable': ''}
     (payload / 'backend-config.json').write_text(json.dumps(config, indent=2), encoding='utf-8')
+
+
+def write_diagnostic_launchers(payload):
+    for name,module in (('history-audit','history_audit'),('visibility-audit','visibility_audit'),('schema-audit','schema_audit')):
+        command=('@echo off\nsetlocal\ntitle Chat Rescue Diagnostics\n'
+                 '"%~dp0runtime\\python.exe" -u -X utf8 -B -m chat_rescue.'+module+'\npause\n')
+        (payload/('run-'+name+'.cmd')).write_bytes(command.replace('\n','\r\n').encode('ascii'))
+
+
+def copy_timezone_data(wheel, payload):
+    with zipfile.ZipFile(wheel) as archive_file:
+        for item in archive_file.infolist():
+            name=Path(item.filename)
+            if not item.filename.startswith('tzdata/') or item.is_dir():continue
+            if name.is_absolute() or '..' in name.parts or ((item.external_attr >> 16) & 0o170000)==0o120000:
+                raise ValueError('Unsafe timezone archive member')
+            target=payload/'app'/name;target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_bytes(archive_file.read(item))
+        for source,target in (
+            ('tzdata-2025.2.dist-info/licenses/LICENSE','tzdata-LICENSE.txt'),
+            ('tzdata-2025.2.dist-info/licenses/licenses/LICENSE_APACHE','tzdata-Apache-2.0.txt')):
+            target=payload/'licenses'/target;target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_bytes(archive_file.read(source))
 
 
 def copy_source(payload):
@@ -91,6 +116,12 @@ def smoke_check(payload):
     report = json.loads(result.stdout)
     if not report['ready']:
         raise RuntimeError('Bundled runtime doctor failed')
+    if not report.get('attachment_crypto_ready'):
+        raise RuntimeError('Bundled Windows media crypto self-test failed')
+    subprocess.run([str(python),'-B','-c',
+        "from zoneinfo import ZoneInfo; from datetime import datetime; import tzdata; "
+        "assert tzdata.__version__=='2025.2'; assert datetime.fromtimestamp(0,ZoneInfo('Asia/Shanghai')).hour==8"],
+        cwd=payload,env=environment,capture_output=True,encoding='utf-8',check=True)
     # Empty profile only; never borrow development settings or account keys.
     with tempfile.TemporaryDirectory(prefix='chat-rescue-package-profile-') as profile:
         result = subprocess.run([str(python), '-B', '-m', 'chat_rescue.windows_backend'], cwd=payload,
@@ -109,6 +140,7 @@ def main():
     parser.add_argument('--cache', type=Path, default=ROOT / 'build/windows-downloads')
     parser.add_argument('--python-archive', type=Path)
     parser.add_argument('--cipher-archive', type=Path)
+    parser.add_argument('--tzdata-archive', type=Path)
     parser.add_argument('--allow-dirty', action='store_true', help='local packaging experiments only')
     args = parser.parse_args()
     if os.name != 'nt':
@@ -122,6 +154,7 @@ def main():
     args.cache.mkdir(parents=True, exist_ok=True)
     python_zip = archive(PYTHON_URL, PYTHON_SHA256, args.cache, args.python_archive)
     cipher_zip = archive(CIPHER_URL, CIPHER_SHA256, args.cache, args.cipher_archive)
+    tzdata_wheel = archive(TZDATA_URL,TZDATA_SHA256,args.cache,args.tzdata_archive)
     payload = output / 'portable'
     runtime = payload / 'runtime'; runtime.mkdir(parents=True)
     with zipfile.ZipFile(python_zip) as archive_file:
@@ -130,8 +163,10 @@ def main():
     with zipfile.ZipFile(cipher_zip) as archive_file:
         (runtime / 'e_sqlcipher.dll').write_bytes(archive_file.read('runtimes/win-x64/native/e_sqlcipher.dll'))
     copy_source(payload)
+    copy_timezone_data(tzdata_wheel,payload)
     shutil.copyfile(runtime / 'LICENSE.txt', payload / 'licenses/Python-LICENSE.txt')
     write_config(payload)
+    write_diagnostic_launchers(payload)
     (payload / 'FIRST-RUN.txt').write_text(
         'Chat Rescue ' + version + ' · Windows 实验版\n\n'
         '已内置 Python 和 SQLCipher，无需安装 Python、修改 PATH 或下载项目源码。\n'
@@ -146,7 +181,7 @@ def main():
     compile_shell(payload)
     report = smoke_check(payload)
     manifest = {'version': version, 'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
-                'source_dirty': bool(status), 'python': '3.14.10', 'sqlcipher': '4.5.2 community',
+                'source_dirty': bool(status), 'python': '3.14.10', 'sqlcipher': '4.5.2 community', 'tzdata':'2025.2',
                 'runtime_doctor': report, 'files': {p.relative_to(payload).as_posix(): sha256(p)
                 for p in sorted(payload.rglob('*')) if p.is_file()}}
     (payload / 'release-manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')

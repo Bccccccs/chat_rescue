@@ -167,9 +167,15 @@ def account_nickname(selected, keys):
 def plan_view(directory):
     directory = Path(directory).resolve(strict=True)
     manifest = json.loads((directory / 'sync-plan.json').read_text(encoding='utf-8'))
-    if (manifest.get('version') not in (1, 4) or set(manifest.get('accounts', {})) != {'A', 'B'}
-            or (manifest.get('version') == 4 and manifest.get('mode') != 'replace-a-from-b')):
+    if (manifest.get('version') not in (1, 4, 5) or set(manifest.get('accounts', {})) != {'A', 'B'}
+            or (manifest.get('version') in (4,5) and manifest.get('mode') != 'replace-a-from-b')):
         raise ValueError('这不是受支持的双向计划')
+    if manifest['version']==5:
+        from .media import windows_options
+        caps=manifest.get('capabilities',[])
+        windows_options({**manifest,'capabilities':caps[:-2]})
+        if caps[-2:]!=['windows-single-chat-replacement','windows-verified-shard-routing']:
+            raise ValueError('媒体替换计划缺少已验证分片能力')
     receipt = directory / 'sync-result.json'
     state = json.loads(receipt.read_text(encoding='utf-8'))['state'] if receipt.exists() else 'ready'
     if (directory / 'sync-started.json').exists() and not receipt.exists():
@@ -196,6 +202,7 @@ def guarded_plan(request):
 
 def dispatch(request):
     action = request.get('action')
+    media_options = {key: True for key in ('include_voice','include_attachments') if request.get(key) is True}
     if action == 'status':
         return {'doctor': cli.doctor(), 'executable': find_executable(), 'candidates': discover(),
                 'workspace': str(workspace()), 'platform': 'Windows', 'settings': saved_settings()}
@@ -232,7 +239,7 @@ def dispatch(request):
         if not main and selected.get('keys'):
             ensure_closed()
             require_private(selected['keys'])
-            cli.verify_keys(selected['root'], selected['keys'])
+            cli.verify_keys(selected['root'], selected['keys'], **({'include_voice':True} if media_options.get('include_voice') else {}))
             return {'state': 'verified', 'account': {**selected,
                     'nickname': account_nickname(selected, selected['keys'])}}
         pids = resource_processes(selected['root'])
@@ -240,7 +247,8 @@ def dispatch(request):
         if len(bound) != 1:
             raise ValueError('无法唯一对应所选账号与微信进程，请核对本次登录与目录')
         directory = job()
-        result = capture(bound[0], request['executable'], selected['root'], selected['owner'], directory / 'keys.json')
+        result = capture(bound[0], request['executable'], selected['root'], selected['owner'], directory / 'keys.json',
+                         **({'include_voice':True} if media_options.get('include_voice') else {}))
         return {**result, 'account': {**selected, 'keys': result['keys'],
                 'nickname': account_nickname(selected, result['keys'])}}
     if action == 'plan':
@@ -253,7 +261,7 @@ def dispatch(request):
         for selected in (a, b):
             require_private(selected['keys'])
         directory = job() / 'sync'
-        make_replace_plan(a, b, directory)
+        make_replace_plan(a, b, directory, **media_options)
         return plan_view(directory)
     if action == 'resume':
         return plan_view(request['plan'])

@@ -9,6 +9,23 @@ from chat_rescue.workflow import save_chat,prepare_plain_restore,table_for,diges
 from chat_rescue.shards import database_rels
 
 
+def group_time_schema(c):
+    c.execute('CREATE TABLE MessageGroupTimeInfo(chatname_id INTEGER, group_id TEXT, create_time INTEGER, initial_sort_seq INTEGER, birth_time INTEGER)')
+    c.execute('CREATE INDEX MessageGroupTimeInfo_CHAT_GROUP ON MessageGroupTimeInfo(chatname_id, group_id)')
+
+
+def reordered_metadata(root,*,reverse=False):
+    with db(root/'session/session.db') as c:
+        pair='create_time INTEGER, local_id INTEGER' if reverse else 'local_id INTEGER, create_time INTEGER'
+        c.execute('CREATE TABLE SessionUnreadListTable_1(username_id INTEGER, server_id INTEGER, '+pair+', CONSTRAINT _NameId_ServerId PRIMARY KEY(username_id, server_id))')
+        c.execute('CREATE INDEX Unread_TIME ON SessionUnreadListTable_1(username_id ASC, create_time ASC)')
+    fields=['id INTEGER PRIMARY KEY','username TEXT','type INTEGER','accept_type INTEGER','child_type INTEGER',
+            'home_url TEXT','version INTEGER','sync_version TEXT','external_info TEXT','brand_info TEXT',
+            'brand_icon_url TEXT','brand_list TEXT','brand_flag INTEGER','belong TEXT','ext_buffer BLOB']
+    if reverse:fields=fields[:5]+[field for field in fields[5:] if not field.startswith(('home_url ','sync_version '))]+['home_url TEXT','sync_version TEXT']
+    with db(root/'contact/contact.db') as c:c.execute('CREATE TABLE biz_info('+', '.join(fields)+')')
+
+
 class SchemaCheckTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
@@ -61,4 +78,42 @@ class SchemaCheckTests(unittest.TestCase):
             with db(root/'message/message_0.db') as c:
                 c.execute('CREATE TRIGGER unknown_aux AFTER UPDATE ON Name2Id BEGIN SELECT 1; END')
         with self.assertRaisesRegex(ValueError,'辅助表结构'):
+            replacement_schema_check(self.source,self.target,A,B)
+
+    def test_observed_lazy_table_and_readonly_column_order_are_compatible(self):
+        with db(self.source/'message/message_0.db') as c:group_time_schema(c)
+        reordered_metadata(self.source);reordered_metadata(self.target,reverse=True)
+        with db(self.target/'contact/contact.db') as c:
+            c.execute("INSERT INTO biz_info(id,username,home_url,sync_version) VALUES(1,'synthetic business','local','v1')")
+        before={rel:digest(self.target/rel) for rel in database_rels(self.target)}
+        self.assertEqual(replacement_schema_check(self.source,self.target,A,B)['state'],'matched')
+        candidate=self.candidate()
+        self.assertEqual(replacement_schema_check(self.source,candidate,A,B,candidate=True)['state'],'matched')
+        with db(candidate/'contact/contact.db') as c:
+            self.assertEqual(c.execute('SELECT username,home_url,sync_version FROM biz_info').fetchone(),('synthetic business','local','v1'))
+        self.assertEqual(before,{rel:digest(self.target/rel) for rel in database_rels(self.target)})
+
+    def test_optional_group_table_with_unknown_fields_or_index_is_refused(self):
+        with db(self.source/'message/message_0.db') as c:
+            group_time_schema(c)
+            c.execute('DROP INDEX MessageGroupTimeInfo_CHAT_GROUP')
+            c.execute('CREATE INDEX MessageGroupTimeInfo_CHAT_GROUP ON MessageGroupTimeInfo(chatname_id DESC,group_id)')
+        with self.assertRaisesRegex(ValueError,'辅助表结构'):
+            replacement_schema_check(self.source,self.target,A,B)
+
+    def test_reordered_metadata_still_rejects_changed_sort_direction(self):
+        reordered_metadata(self.source);reordered_metadata(self.target,reverse=True)
+        with db(self.target/'session/session.db') as c:
+            c.execute('DROP INDEX Unread_TIME')
+            c.execute('CREATE INDEX Unread_TIME ON SessionUnreadListTable_1(username_id ASC,create_time DESC)')
+        with self.assertRaisesRegex(ValueError,'辅助库字段或索引'):
+            replacement_schema_check(self.source,self.target,A,B)
+
+    def test_reordered_metadata_still_rejects_unknown_constraints(self):
+        reordered_metadata(self.source);reordered_metadata(self.target,reverse=True)
+        with db(self.target/'contact/contact.db') as c:
+            definition=c.execute("SELECT sql FROM sqlite_master WHERE name='biz_info'").fetchone()[0]
+            c.execute('DROP TABLE biz_info')
+            c.execute(definition.replace('type INTEGER,','type INTEGER CHECK(type>=0),',1))
+        with self.assertRaisesRegex(ValueError,'辅助库字段或索引'):
             replacement_schema_check(self.source,self.target,A,B)

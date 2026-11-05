@@ -1,5 +1,7 @@
 # 第三方代码与工具
 
+Windows 0.5.6 内置 Python tzdata 2025.2（IANA 时区数据），由 Python Software Foundation 发布，Apache-2.0；用于隔离运行时的媒体月份路径。固定分发包 SHA256 为 `1a403fada01ff9221ca8044d701868fa132215d84beb92242d9acd2147f667a8`。来源：https://pypi.org/project/tzdata/2025.2/ 。分发许可与 Apache 2.0 全文分别随包保存在 `licenses/tzdata-LICENSE.txt`、`licenses/tzdata-Apache-2.0.txt`，数据包自身许可文件亦保留。
+
 ## 固定上游取钥代码
 
 本项目取钥捕获代码使用 acmerfight 发布的 Gist 固定副本：

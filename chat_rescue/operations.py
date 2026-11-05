@@ -10,6 +10,7 @@ from .voice import MEDIA, CAPABILITY, single_media
 from .runtime import supported_host, ensure_closed, exclusive_lock, make_private
 from .windows_version import is_windows_42_version
 from .shards import message_shards, database_rels, mutable_rels, validate_plan_files, check_paths, receipt_covers
+from .media import format_for, windows_options
 
 ALL = (*RELS, 'contact/contact.db')
 
@@ -42,26 +43,31 @@ def plan_sets(plan):
     from . import attachments as att
     version = plan.get('version')
     caps = plan.get('capabilities', [])
-    voice = version == 2 or (version == 3 and CAPABILITY in caps)
-    if (version not in (1,2,3)
+    windows = windows_options(plan) if version == 5 else None
+    voice = windows['include_voice'] if windows else version == 2 or (version == 3 and CAPABILITY in caps)
+    attachments = windows['include_attachments'] if windows else version == 3
+    if (version not in (1,2,3,5)
             or (version == 2 and caps != [CAPABILITY])
             or (version == 3 and caps != ([CAPABILITY] if voice else [])+[att.CAPABILITY])):
         raise ValueError('计划格式不受支持')
-    if version == 3:
+    if version in (2,3) and platform.system()=='Windows':
+        raise ValueError('Windows 不处理 Mac 语音或附件计划')
+    if attachments:
         att.validate_plan(plan)
-        if platform.system() == 'Windows':raise ValueError('Windows附件恢复尚未适配')
+    if windows and platform.system() != 'Windows':
+        raise ValueError('Windows 媒体计划只能在 Windows 应用')
     root = plan.get('target_root')
     if not root:
         raise ValueError('计划缺少目标目录')
-    if voice or version == 3 or platform.system() == 'Darwin':
+    if (not windows and (voice or attachments)) or platform.system() == 'Darwin':
         _single_shard(root)
     read_set = inspection_files(root, voice)
-    write_set = tuple(plan.get('write_set', ())) if version in (2,3) else mutable_rels(root)
+    write_set = tuple(plan.get('write_set', ())) if version in (2,3,5) else mutable_rels(root)
     allowed_writes = (*mutable_rels(root), MEDIA) if voice else mutable_rels(root)
-    if ((not write_set and not (version==3 and plan['assets']['candidates']))
+    if ((not write_set and not (attachments and plan['assets']['candidates']))
             or len(set(write_set)) != len(write_set)
             or not set(write_set) <= set(allowed_writes)
-            or (version in (2,3) and plan.get('read_set') != list(read_set))
+            or (version in (2,3,5) and plan.get('read_set') != list(read_set))
             or set(plan['candidates']) != set(write_set)
             or set(plan['originals']) != {r+suffix for r in read_set for suffix in ('','-wal','-shm')}):
         raise ValueError('计划原件路径或写入集合不受支持')
@@ -120,9 +126,12 @@ def export_root(root, keys, output, *, include_voice=False, include_attachments=
     output = Path(output).resolve()
     if output.is_relative_to(root) or root.is_relative_to(output):
         raise ValueError('导出目录必须位于微信数据目录之外')
-    profile = capture_direction_profile(root, keys)
-    if (include_voice or include_attachments) and (profile != LEGACY_PROFILE or platform.system() == 'Windows'):
-        raise ValueError('媒体实验模式仅适配 Mac；Windows 尚未适配语音/附件')
+    profile = capture_direction_profile(root, keys, include_voice=include_voice)
+    if ((include_voice or include_attachments) and platform.system() == 'Windows'
+            and profile not in (WINDOWS_STRUCTURED_PROFILE, WINDOWS_PARTICIPANT_PROFILE)):
+        raise ValueError('Windows 媒体实验模式需要账号绑定的 Windows 取钥回执')
+    if include_voice:
+        single_media(root)
     files = inspection_files(root, include_voice)
     output = fresh(output)
     snapshot = output / '_encrypted_snapshot'
@@ -141,24 +150,26 @@ def export_root(root, keys, output, *, include_voice=False, include_attachments=
         copied_keys.unlink(missing_ok=True)
     if state(root, include_voice) != before:
         raise ValueError('导出期间原库改变，当前导出不可用于恢复')
-    report = {'version': 3 if include_attachments else 2 if include_voice else 1, 'capabilities': [CAPABILITY] if include_voice else [], 'account_directory': root.parent.name, 'originals': before, 'direction_profile': profile,
+    if include_voice and profile in (WINDOWS_STRUCTURED_PROFILE,WINDOWS_PARTICIPANT_PROFILE):
+        from .media import check_voice_layout
+        check_voice_layout(output)
+    version, capabilities = format_for(profile, include_voice, include_attachments)
+    report = {'version': version, 'capabilities': capabilities, 'account_directory': root.parent.name, 'originals': before, 'direction_profile': profile,
               'message_shards': list(message_shards(snapshot)),
               'exported': {rel: digest(output / rel) for rel in files}}
     if include_attachments:
         report['attachment_root'] = str(root.parent)
-        from .attachments import CAPABILITY as ATTACH_CAP
-        report['capabilities'].append(ATTACH_CAP)
     private_json(output / 'export-report.json', report)
     return {'report': str(output / 'export-report.json'), 'database_count': len(files)}
 
 
-def capture_direction_profile(root, keys):
+def capture_direction_profile(root, keys, *, include_voice=False):
     """Use a matching local capture receipt, never infer database layout from host OS."""
     receipt = Path(keys).with_suffix('.capture.json')
     if not receipt.exists():
         return LEGACY_PROFILE
     value = json.loads(receipt.read_text(encoding='utf-8'))
-    if (value.get('state') != 'verified' or not receipt_covers(root, value)
+    if (value.get('state') != 'verified' or not receipt_covers(root, value, include_voice)
             or Path(value.get('database_root', '')).resolve() != Path(root).resolve()):
         raise ValueError('取钥回执与导出账号目录不匹配')
     check_owner(root, value.get('owner') or 'invalid-owner')
@@ -195,14 +206,16 @@ def make_plan(source, root, keys, owner, output, *, include_voice=False, include
     ensure_closed()
     if state(root, include_voice) != report['originals']:
         raise ValueError('生成计划期间目标库改变')
-    plan = {'version': 3 if include_attachments else 2 if voice else 1, 'target_root': str(root), 'target_owner': owner,
+    version, capabilities = format_for(report['direction_profile'], voice, include_attachments)
+    plan = {'version': version, 'target_root': str(root), 'target_owner': owner,
             'originals': report['originals'], 'candidates': {r: digest(output / 'candidates' / r) for r in writes},
             'report': result}
     if voice or include_attachments:
-        from .attachments import CAPABILITY as ATTACH_CAP
-        plan.update(capabilities=([CAPABILITY] if voice else [])+([ATTACH_CAP] if include_attachments else []), read_set=list(files_for(voice)), write_set=list(writes))
+        plan.update(capabilities=capabilities, read_set=list(inspection_files(root, voice)), write_set=list(writes))
     if include_attachments:
         plan['assets'] = result['assets']
+        from .attachments import validate_plan
+        validate_plan(plan)
         candidates = output/'recovered-plain/attachment-candidates'
         if candidates.exists():
             shutil.move(str(candidates), output/'attachment-candidates')
@@ -229,7 +242,7 @@ def apply_plan(directory):
             raise ValueError('计划与原库目录必须分离')
         if include_voice:
             single_media(root)
-        if include_voice or plan['version'] == 3 or platform.system() == 'Darwin':
+        if (plan['version'] != 5 and (include_voice or plan['version'] == 3)) or platform.system() == 'Darwin':
             _single_shard(root)
         allowed = {r + s for r in read_set for s in ('', '-wal', '-shm')}
         if set(plan['originals']) != allowed:
@@ -246,7 +259,7 @@ def apply_plan(directory):
         backup.mkdir(mode=0o700)
         staged, replaced = [], []
         attachment_transaction = None
-        if plan['version'] == 3:
+        if plan['version'] == 3 or (plan['version'] == 5 and windows_options(plan)['include_attachments']):
             from .attachments import Transaction
             attachment_transaction = Transaction(plan,directory)
         # Copy every original before the first replacement. WAL/SHM is essential.
@@ -285,7 +298,7 @@ def apply_plan(directory):
             private_json(directory / 'apply-started.json', {'state': 'started', 'backup': str(backup)})
             if include_voice:
                 single_media(root)
-            if include_voice or plan['version'] == 3 or platform.system() == 'Darwin':
+            if (plan['version'] != 5 and (include_voice or plan['version'] == 3)) or platform.system() == 'Darwin':
                 _single_shard(root)
             for rel, p in zip(writes, staged):
                 # Mark before touching sidecars so rollback also repairs this DB.

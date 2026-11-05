@@ -219,13 +219,17 @@ def scan(process, pages, deadline):
     raise RuntimeError('未完成四个必要数据库的 HMAC 验证；没有保存部分密钥')
 
 
-def capture(pid, executable, root, owner, output, timeout=120):
+def capture(pid, executable, root, owner, output, timeout=120, *, include_voice=False):
     if not 1 <= pid <= 0xffffffff or not 10 <= timeout <= 300:
         raise ValueError('PID 或超时参数无效；超时范围 10–300 秒')
     metadata = app_info(executable)
     root, output = Path(root).resolve(strict=True), Path(output).resolve()
     check_owner(root, owner)
-    rels = database_rels(root)
+    from .operations import inspection_files
+    from .voice import single_media
+    if include_voice:
+        single_media(root)
+    rels = inspection_files(root, include_voice)
     check_paths(root, [r + s for r in rels for s in ('', '-wal', '-shm')])
     if output.exists() or output.with_suffix('.capture.json').exists():
         raise FileExistsError('输出或回执已存在，请保留现场并使用新文件名')
@@ -244,7 +248,7 @@ def capture(pid, executable, root, owner, output, timeout=120):
         keys = scan(process, pages, time.monotonic() + timeout)
     finally:
         process.close()
-    if (set(keys) != set(rels) or database_rels(root) != rels
+    if (set(keys) != set(rels) or inspection_files(root, include_voice) != rels
             or digest(metadata['executable']) != metadata['sha256']):
         raise RuntimeError('四库覆盖不足或程序文件改变，拒绝保存')
     for rel, page in pages.items():
@@ -257,7 +261,9 @@ def capture(pid, executable, root, owner, output, timeout=120):
         with DB(root / rel, keys[rel]) as database:
             if database.query('PRAGMA integrity_check;') != [{'integrity_check': 'ok'}]:
                 raise RuntimeError('四库完整性验证未通过，拒绝保存')
-    if database_rels(root) != rels:
+    if include_voice:
+        single_media(root)
+    if inspection_files(root, include_voice) != rels:
         raise RuntimeError('验证期间分片清单改变，拒绝保存')
     private_json(output, {'keys': {rel: {'enc_key': keys[rel]} for rel in rels}})
     receipt = output.with_suffix('.capture.json')

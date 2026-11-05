@@ -21,6 +21,9 @@ def single_media(root):
     paths = list((Path(root) / 'message').glob('media_*.db'))
     if len(paths) != 1 or paths[0].name != 'media_0.db' or paths[0].is_symlink():
         raise ValueError('语音模式仅接受单个已有 media_0.db；不支持额外媒体分片')
+    for path in (Path(root)/'message').glob('media_*.db-*'):
+        if path.name not in ('media_0.db-wal','media_0.db-shm') or path.is_symlink():
+            raise ValueError('语音媒体分片存在未知或孤立 sidecar，拒绝继续')
 
 
 def schema(c):

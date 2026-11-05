@@ -180,3 +180,29 @@ class ReplacementTests(unittest.TestCase):
         with patch('chat_rescue.operations.ensure_closed'),self.assertRaisesRegex(ValueError,'取钥回执'):
             self.plan()
         self.assertEqual(ops.state(self.target[0]),self.a_before)
+
+    def test_observed_metadata_layouts_apply_and_undo_without_rewriting_contact(self):
+        from test_schema_checks import group_time_schema,reordered_metadata
+        with db(self.b_plain/'message/message_0.db') as c:group_time_schema(c)
+        reordered_metadata(self.b_plain);reordered_metadata(self.a_plain,reverse=True)
+        self.install(self.source,self.b_plain);self.install(self.target,self.a_plain)
+        a_before,b_before=ops.state(self.target[0]),ops.state(self.source[0])
+        with patch('chat_rescue.operations.ensure_closed'):
+            result=self.plan()
+            self.assertEqual(result['directions']['A']['structure_check']['state'],'matched')
+            self.assertEqual(sync.apply_sync_plan(self.root/'replace')['state'],'applied')
+            self.assertEqual(digest(self.target[0]/'contact/contact.db'),a_before['contact/contact.db'])
+            self.assertEqual(ops.state(self.source[0]),b_before)
+            self.assertEqual(sync.undo_sync_plan(self.root/'replace')['state'],'undone')
+        self.assertEqual(ops.state(self.target[0]),a_before)
+
+    def test_unknown_auxiliary_shape_still_blocks_with_a_private_difference_report(self):
+        with db(self.b_plain/'message/message_0.db') as c:c.execute('CREATE TABLE UnknownAux(field INTEGER)')
+        self.install(self.source,self.b_plain)
+        a_before,b_before=ops.state(self.target[0]),ops.state(self.source[0])
+        with patch('chat_rescue.operations.ensure_closed'),self.assertRaisesRegex(ValueError,'结构差异报告'):
+            self.plan()
+        self.assertTrue((self.root/'replace/schema-diff.json').is_file())
+        self.assertFalse((self.root/'replace/sync-plan.json').exists())
+        self.assertEqual(ops.state(self.target[0]),a_before)
+        self.assertEqual(ops.state(self.source[0]),b_before)

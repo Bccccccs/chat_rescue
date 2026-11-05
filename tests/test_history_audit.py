@@ -76,6 +76,32 @@ class HistoryAuditTests(unittest.TestCase):
         with db(self.b/'message/message_0.db') as c:c.execute('UPDATE '+table_for(A)+' SET create_time=0')
         with self.assertRaisesRegex(ValueError,'hash'):audit.audit_task(self.task)
 
+    def test_v5_voice_plan_dates_include_media_hash_without_claiming_playback(self):
+        from chat_rescue.media import windows_capabilities
+        for root in (self.a,self.b,self.task/'A-plan/recovered-plain'):
+            with db(root/'message/media_0.db') as c:c.execute('CREATE TABLE VoiceInfo(synthetic INTEGER)')
+            path=root/'export-report.json'
+            if path.exists():
+                value=json.loads(path.read_text(encoding='utf-8'))
+                value['exported']['message/media_0.db']=digest(root/'message/media_0.db')
+                path.write_text(json.dumps(value),encoding='utf-8')
+        path=self.task/'sync-plan.json';manifest=json.loads(path.read_text(encoding='utf-8'))
+        manifest.update(version=5,capabilities=windows_capabilities(True,False)+[
+            'windows-single-chat-replacement','windows-verified-shard-routing'])
+        path.write_text(json.dumps(manifest),encoding='utf-8')
+        candidate=self.task/'A-plan/candidates/message/media_0.db';candidate.write_bytes(b'synthetic encrypted voice placeholder')
+        path=self.task/'A-plan/plan.json';plan=json.loads(path.read_text(encoding='utf-8'))
+        plan['candidates']['message/media_0.db']=digest(candidate)
+        path.write_text(json.dumps(plan),encoding='utf-8')
+        path=self.task/'sync-result.json';receipt=json.loads(path.read_text(encoding='utf-8'))
+        receipt['accounts']['A']['after']['message/media_0.db']=digest(candidate)
+        path.write_text(json.dumps(receipt),encoding='utf-8')
+        result,_=audit.audit_task(self.task)
+        self.assertTrue(result['applied_A_hashes_match_candidates'])
+        self.assertTrue(result['snapshot_options']['include_voice'])
+        self.assertFalse(result['client_media_playback_checked'])
+        self.assertEqual(result['bundle_missing_from_candidate'],{})
+
     def test_fast_json_reads_only_selected_chat_without_resource_database(self):
         output=Path(self.tmp.name)/'local-json'
         (self.b/'message/message_resource.db').unlink()

@@ -59,8 +59,18 @@ def validate_plan_files(root, plan):
     return rels
 
 
-def receipt_covers(root, receipt):
+def receipt_covers(root, receipt, include_voice=False):
     rels = database_rels(root)
+    if include_voice:
+        from .voice import MEDIA, single_media
+        single_media(root)
+        rels = (*rels, MEDIA)
+    elif 'message/media_0.db' in (receipt.get('verified_databases') or []):
+        # A five-library receipt remains usable for a basic task; unknown extra
+        # databases still fail the exact inventory check below.
+        from .voice import MEDIA, single_media
+        single_media(root)
+        rels = (*rels, MEDIA)
     if receipt.get('verified_required_databases') != len(rels):
         return False
     recorded = receipt.get('verified_databases')

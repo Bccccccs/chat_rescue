@@ -239,7 +239,8 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
     if owner == peer or '@' in owner or '@' in peer:
         raise ValueError('only two different personal WeChat identities are supported')
     shards = message_rels(root)
-    if platform.system() == 'Darwin' or include_voice or include_attachments:
+    profile = plain_profile(root)
+    if platform.system() == 'Darwin' or ((include_voice or include_attachments) and profile not in WINDOWS_PROFILES):
         _single_shard(root)
     check_paths(root, database_rels(root))
     report_path = root / 'export-report.json'
@@ -255,8 +256,8 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
             raise ValueError('导出数据库哈希改变')
     profile = plain_profile(root)
     if participant_identity_layout:
-        if profile not in WINDOWS_PROFILES or include_voice or include_attachments:
-            raise ValueError('参与者编号模式需要已绑定 Windows 回执的基础导出')
+        if profile not in WINDOWS_PROFILES:
+            raise ValueError('参与者编号模式需要已绑定 Windows 回执的导出')
         profile = WINDOWS_PARTICIPANT_PROFILE
     if exclude_system_messages and profile not in (WINDOWS_STRUCTURED_PROFILE, WINDOWS_PARTICIPANT_PROFILE):
         raise ValueError('单向重建需要配套 Windows structured 取钥回执，请保留原任务')
@@ -355,18 +356,21 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
         payload['participant_ids'] = participant_ids
     if include_voice:
         from .voice import collect, CAPABILITY
-        if profile != LEGACY_PROFILE:
-            raise ValueError('语音实验模式仅适配 Mac 方向配置')
+        if profile in WINDOWS_PROFILES:
+            from .media import check_voice_layout
+            check_voice_layout(root)
         payload.update(version=2, capabilities=[CAPABILITY],
                        voices=collect(root, peer, messages, output, allow_missing_voice))
     if include_attachments:
         from . import attachments as att
-        if profile != LEGACY_PROFILE:
-            raise ValueError('附件模式仅适配Mac方向配置')
         asset_root = att.resolve_root(root, asset_root)
         entries, originals = att.collect(root, asset_root, owner, peer, messages, output, allow_missing_attachments)
         payload.update(version=3, capabilities=payload.get('capabilities', [])+[att.CAPABILITY],
                        attachments=entries, attachment_originals=originals)
+    from .media import format_for
+    version, capabilities = format_for(profile, include_voice, include_attachments)
+    if include_voice or include_attachments:
+        payload.update(version=version, capabilities=capabilities)
     private_json(output / 'conversation.json', pack(payload))
     private_json(output / 'manifest.json', {'version': payload['version'], 'sha256': digest(output / 'conversation.json'),
                                           'message_count': len(messages)})
@@ -390,7 +394,8 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
     os.umask(0o077)
     bundle, target_root, output = Path(bundle), Path(target_root), Path(output)
     manifest = json.loads((bundle / 'manifest.json').read_text(encoding='utf-8'))
-    if (manifest.get('version') not in ((1,2,3) if include_attachments and include_voice else (1,3) if include_attachments else (1,2) if include_voice else (1,))
+    versions = ((1,2,3) if include_attachments and include_voice else (1,3) if include_attachments else (1,2) if include_voice else (1,))
+    if (manifest.get('version') not in (*versions, *((5,) if include_voice or include_attachments else ()))
             or digest(bundle / 'conversation.json') != manifest.get('sha256')):
         raise ValueError('bundle version/hash mismatch')
     data = unpack(json.loads((bundle / 'conversation.json').read_text(encoding='utf-8')))
@@ -398,6 +403,19 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
         raise ValueError('target owner must be the source conversation peer')
     source_profile = direction_profile(data.get('direction_profile', LEGACY_PROFILE))
     target_profile = plain_profile(target_root)
+    windows_media = data['version'] == 5
+    if windows_media:
+        from .media import windows_options
+        if (windows_options(data) != {'include_voice': include_voice, 'include_attachments': include_attachments}
+                or source_profile not in WINDOWS_PROFILES or target_profile not in WINDOWS_PROFILES):
+            raise ValueError('Windows 媒体能力、方向配置与本次显式开关不一致')
+        if include_voice:
+            from .media import check_voice_layout
+            check_voice_layout(target_root)
+        if len(message_rels(target_root)) > 1 and destination_shard is None:
+            raise ValueError('Windows 多分片媒体恢复须使用已验证分片的 B→A 替换预览')
+    elif (include_voice or include_attachments) and (source_profile in WINDOWS_PROFILES or target_profile in WINDOWS_PROFILES):
+        raise ValueError('Windows 媒体需要新版 v5 bundle，不能使用 Mac 媒体包')
     if data['version'] == 1 and source_profile == LEGACY_PROFILE and any(m['fields']['local_type'] == 34 for m in data['messages']):
         raise ValueError('旧 bundle 不允许携带语音')
     attachment_mode = include_attachments
@@ -412,13 +430,13 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
     audios = {}
     if voice_mode:
         from .voice import CAPABILITY, MEDIA, single_media, read_entries
-        if ((data['version'] == 2 and data.get('capabilities') != [CAPABILITY])
+        if not windows_media and ((data['version'] == 2 and data.get('capabilities') != [CAPABILITY])
                 or source_profile != LEGACY_PROFILE or target_profile != LEGACY_PROFILE):
             raise ValueError('语音能力或方向配置不受支持')
         single_media(target_root)
-        if data['version'] in (2,3):
+        if data['version'] in (2,3,5):
             audios = read_entries(bundle, data)
-    if platform.system() == 'Darwin' or include_voice or include_attachments:
+    if platform.system() == 'Darwin' or ((include_voice or include_attachments) and not windows_media):
         _single_shard(target_root)
     shards = message_rels(target_root)
     check_paths(target_root, database_rels(target_root))
@@ -444,7 +462,7 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
     destination = (containing or list(shards))[-1]
     if destination_shard is not None:
         if (source_profile!=WINDOWS_PARTICIPANT_PROFILE or target_profile!=WINDOWS_PARTICIPANT_PROFILE
-                or include_voice or include_attachments or destination_shard not in shards):
+                or ((include_voice or include_attachments) and not windows_media) or destination_shard not in shards):
             raise ValueError('显式分片仅允许已有 Windows participant-ids 消息分片')
         destination=destination_shard
         with connect(target_root/destination) as target:
@@ -462,12 +480,12 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
         shutil.copy2(target_root / rel, output / rel)
     if attachment_mode:
         from . import attachments as att
-        if source_profile != LEGACY_PROFILE or target_profile != LEGACY_PROFILE:
+        if not windows_media and (source_profile != LEGACY_PROFILE or target_profile != LEGACY_PROFILE):
             raise ValueError('附件模式仅适配Mac方向配置')
-        if data['version'] != 3 and any(m['fields']['local_type'] in (3,43,(6<<32)|49) for m in data['messages']):
+        if data['version'] not in (3,5) and any(m['fields']['local_type'] in (3,43,(6<<32)|49) for m in data['messages']):
             raise ValueError('旧bundle没有附件本体，请用附件模式重新导出')
         target_asset_root = att.resolve_root(target_root, target_asset_root)
-        if data['version'] == 3:
+        if data['version'] in (3,5):
             attachment_plan, attachment_counts = att.prepare(bundle, data, target_root, target_asset_root, target_owner, output)
         else:
             attachment_plan = {'originals':{}, 'candidates':{}}

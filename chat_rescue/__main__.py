@@ -213,7 +213,7 @@ def doctor():
         except (RuntimeError, OSError):
             checks['apple_lldb'] = False
     crypto_ready = False
-    if host and not windows and checks['sqlcipher']:
+    if host and checks['sqlcipher']:
         try:
             from .attachments import aes
             sample = b'chat-rescue-private-self-test'
@@ -233,8 +233,6 @@ def verify_keys(root, keys, *, include_voice=False):
     supported_host(); ensure_closed()
     root = Path(root).resolve(strict=True)
     if include_voice:
-        if platform.system() == 'Windows':
-            raise ValueError('Windows 语音恢复尚未适配')
         from .voice import single_media
         single_media(root)
     required = inspection_files(root, include_voice)
@@ -270,11 +268,12 @@ def main():
     c.add_argument('--pid', type=int, required=True); c.add_argument('--exe', required=True)
     c.add_argument('--db-root', required=True); c.add_argument('--owner', required=True)
     c.add_argument('--output', required=True); c.add_argument('--timeout', type=int, default=120)
-    c = commands.add_parser('plan-sync')
-    for slot in ('a', 'b'):
-        for field in ('root', 'keys', 'owner'):
-            c.add_argument('--' + slot + '-' + field, required=True)
-    c.add_argument('--output', required=True)
+    for name in ('plan-sync','plan-replace'):
+        c = commands.add_parser(name)
+        for slot in ('a', 'b'):
+            for field in ('root', 'keys', 'owner'):
+                c.add_argument('--' + slot + '-' + field, required=True)
+        c.add_argument('--output', required=True)
     c = commands.add_parser('apply-sync'); c.add_argument('--plan', required=True)
     c = commands.add_parser('undo-sync'); c.add_argument('--plan', required=True)
     c = commands.add_parser('prepare-key-app'); c.add_argument('--app', required=True); c.add_argument('--output', required=True)
@@ -284,10 +283,10 @@ def main():
     c = commands.add_parser('save-chat'); c.add_argument('--plain-root', required=True); c.add_argument('--owner', required=True); c.add_argument('--peer', required=True); c.add_argument('--output', required=True)
     c = commands.add_parser('plan-restore'); c.add_argument('--source', required=True); c.add_argument('--target-db-root', required=True); c.add_argument('--target-keys', required=True); c.add_argument('--target-owner', required=True); c.add_argument('--output', required=True)
     c = commands.add_parser('apply'); c.add_argument('--plan', required=True)
-    for name in ('verify-keys','capture-keys','export-db','save-chat','plan-restore','plan-sync'):
-        commands.choices[name].add_argument('--include-voice', action='store_true', help='启用 Mac 语音离线实验模式；需媒体库密钥，客户端播放及手机迁移待验收')
-    for name in ('export-db','save-chat','plan-restore','plan-sync'):
-        commands.choices[name].add_argument('--include-attachments', action='store_true', help='启用Mac图片、视频和文件附件实验模式；需完整本地文件，客户端打开仍待验收')
+    for name in ('verify-keys','capture-keys','capture-windows-keys','export-db','save-chat','plan-restore','plan-sync','plan-replace'):
+        commands.choices[name].add_argument('--include-voice', action='store_true', help='启用语音离线实验模式；需媒体库密钥，客户端播放及手机迁移待验收')
+    for name in ('export-db','save-chat','plan-restore','plan-sync','plan-replace'):
+        commands.choices[name].add_argument('--include-attachments', action='store_true', help='启用图片、视频和文件附件实验模式；需完整本地文件，客户端打开仍待验收')
     a = p.parse_args()
     voice_options = {'include_voice': True} if getattr(a, 'include_voice', False) else {}
     if getattr(a, 'include_attachments', False):voice_options['include_attachments']=True
@@ -305,10 +304,13 @@ def main():
             result = windows_app_info(a.exe)
         elif a.command == 'capture-windows-keys':
             from .windows_capture import capture as windows_capture
-            result = windows_capture(a.pid, a.exe, a.db_root, a.owner, a.output, a.timeout)
+            result = windows_capture(a.pid, a.exe, a.db_root, a.owner, a.output, a.timeout, **voice_options)
         elif a.command == 'plan-sync':
             from .sync import make_sync_plan
             result = make_sync_plan(*({field: getattr(a, slot + '_' + field) for field in ('root', 'keys', 'owner')} for slot in ('a', 'b')), a.output, **voice_options)
+        elif a.command == 'plan-replace':
+            from .replacement import make_replace_plan
+            result = make_replace_plan(*({field: getattr(a, slot + '_' + field) for field in ('root', 'keys', 'owner')} for slot in ('a', 'b')), a.output, **voice_options)
         elif a.command in ('apply-sync', 'undo-sync'):
             from .sync import apply_sync_plan, undo_sync_plan
             result = (apply_sync_plan if a.command == 'apply-sync' else undo_sync_plan)(a.plan)

@@ -64,14 +64,26 @@ def routing_inventory(root, owner, peer):
         {'path':times[stamp],'timestamp':stamp,'independent_witnesses':len(bindings[times[stamp]][1])} for stamp in stamps]}
 
 
-def routed_restore(bundle, base, owner, output, inventory):
+def routed_restore(bundle, base, owner, output, inventory, *, include_voice=False, include_attachments=False, target_asset_root=None):
     bundle,base,output=Path(bundle),Path(base),Path(output)
     manifest=json.loads((bundle/'manifest.json').read_text(encoding='utf-8'))
-    if manifest.get('version')!=1 or manifest.get('sha256')!=digest(bundle/'conversation.json'):
+    if manifest.get('version') not in ((5,) if include_voice or include_attachments else (1,)) or manifest.get('sha256')!=digest(bundle/'conversation.json'):
         raise ValueError('分片源 bundle 校验失败')
     data=json.loads((bundle/'conversation.json').read_text(encoding='utf-8'))
     if data.get('peer')!=owner or len(data['messages'])!=manifest['message_count']:
         raise ValueError('分片源账号或数量不匹配')
+    if include_voice or include_attachments:
+        from .media import windows_options
+        from .workflow import unpack
+        if windows_options(data)!={'include_voice':include_voice,'include_attachments':include_attachments}:
+            raise ValueError('分片媒体能力与显式开关不一致')
+        # Validate complete manifests and global size bounds before splitting.
+        if include_voice:
+            from .voice import read_entries
+            read_entries(bundle,unpack(data))
+        if include_attachments:
+            from .attachments import read_entries
+            read_entries(bundle,unpack(data))
     definitions=inventory['shards'];groups=defaultdict(list)
     times=[item['timestamp'] for item in definitions]
     for message in data['messages']:
@@ -81,16 +93,34 @@ def routed_restore(bundle, base, owner, output, inventory):
         groups[definitions[index]['path']].append(message)
     stage_root=fresh(output.parent/'routing-stages');previous=base
     added=skipped=variants=0;summary=[];result=None
+    assets={'originals':{},'candidates':{}};media_counts={};asset_sources={}
     for index,definition in enumerate(definitions):
         rel=definition['path'];messages=groups[rel]
         if not messages:continue
         chunk=fresh(stage_root/('bundle-'+str(index)))
         ids={m['fields']['server_id'] for m in messages}
         subset={**data,'messages':messages,'resources':[r for r in data['resources'] if r['info']['message_svr_id'] in ids]}
+        for key in ('voices','attachments'):
+            if key in data:subset[key]=[entry for entry in data[key] if entry['server_id'] in ids]
+        paths=[entry['audio']['path'] for entry in subset.get('voices',[]) if entry['audio']]
+        paths += [item['payload'] for entry in subset.get('attachments',[]) for item in entry['files']]
+        for name in paths:
+            destination=chunk/name;destination.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(bundle/name,destination)
         private_json(chunk/'conversation.json',subset)
-        private_json(chunk/'manifest.json',{'version':1,'sha256':digest(chunk/'conversation.json'),'message_count':len(messages)})
+        private_json(chunk/'manifest.json',{'version':manifest['version'],'sha256':digest(chunk/'conversation.json'),'message_count':len(messages)})
         next_root=stage_root/('plain-'+str(index))
-        result=prepare_plain_restore(chunk,previous,owner,next_root,destination_shard=rel)
+        result=prepare_plain_restore(chunk,previous,owner,next_root,destination_shard=rel,
+            include_voice=include_voice,include_attachments=include_attachments,target_asset_root=target_asset_root)
+        for key,value in result.items():
+            if key.startswith(('voice_','image_','video_','file_','attachments_','attachment_resource_')) and type(value) is int:
+                media_counts[key]=media_counts.get(key,0)+value
+        if include_attachments:
+            for key in assets:
+                for name,value in result['assets'][key].items():
+                    if name in assets[key] and assets[key][name]!=value:raise ValueError('跨分片附件路径或内容冲突')
+                    assets[key][name]=value
+                    if key=='candidates':asset_sources[name]=next_root/'attachment-candidates'/name
         added+=result['added'];skipped+=result['skipped'];variants+=result['timestamp_variants_preserved']
         summary.append({**definition,'imported':result['added'],
             'first_timestamp':min(m['fields']['create_time'] for m in messages),
@@ -98,9 +128,12 @@ def routed_restore(bundle, base, owner, output, inventory):
         previous=next_root
     if result is None:raise ValueError('没有可导入的普通消息')
     output=fresh(output)
-    for rel in database_rels(previous):
+    from .voice import MEDIA
+    for rel in (*database_rels(previous), *((MEDIA,) if include_voice else ())):
         dest=output/rel;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(previous/rel,dest)
     shutil.copy2(previous/'direction-profile.json',output/'direction-profile.json')
+    for name,path in asset_sources.items():
+        dest=output/'attachment-candidates'/name;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(path,dest)
     # Old local-ID coverage cannot claim that the re-created rows were indexed.
     # Invalidate only this chat's stale coverage; never fabricate completed FTS.
     invalidated=0
@@ -114,7 +147,9 @@ def routed_restore(bundle, base, owner, output, inventory):
     result.update(added=added,skipped=skipped,timestamp_variants_preserved=variants,
         source_message_shards=data.get('source_shards',[]),target_shard_imports=summary,
         shard_routing=inventory,invalidated_fts_ranges=invalidated,client_search_index_verified=False,
-        changed_databases=[rel for rel in mutable_rels(base) if digest(base/rel)!=digest(output/rel)])
+        changed_databases=[rel for rel in (*mutable_rels(base), *((MEDIA,) if include_voice else ())) if digest(base/rel)!=digest(output/rel)],
+        **media_counts)
+    if include_attachments:result['assets']=assets
     # Verify IDs, timestamps, shard destination and role transformation before encryption.
     expected={m['fields']['server_id']:(m['fields']['create_time'],rel)
               for rel,messages in groups.items() for m in messages}

@@ -41,7 +41,7 @@ class VisibilityAuditTests(unittest.TestCase):
 
     def test_modified_snapshot_is_refused(self):
         with db(self.root/'message/message_0.db') as c:c.execute("UPDATE db_info SET ValueInt64=0")
-        with self.assertRaisesRegex(ValueError,'hashes changed'):inspect_snapshot(self.root,A,verify_export=True)
+        with self.assertRaisesRegex(ValueError,'hash'):inspect_snapshot(self.root,A,verify_export=True)
 
 
 if __name__=='__main__':unittest.main()

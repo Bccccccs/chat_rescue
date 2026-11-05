@@ -2,6 +2,7 @@
 import json
 import platform
 import shutil
+import sqlite3
 from pathlib import Path
 from . import operations as ops
 from .cipher import encrypt_database
@@ -10,17 +11,25 @@ from .workflow import (connect, write_connect, ident, table_for, digest, private
 from .shards import database_rels, message_rels, mutable_rels
 from .schema_checks import replacement_schema_check
 from .routing import routing_inventory, routed_restore, CAPABILITY as ROUTING_CAPABILITY
+from .voice import MEDIA
+from .media import format_for, check_voice_layout
 
 MODE = 'replace-a-from-b'
 
 
-def replacement_base(exported, output, owner, peer):
+def replacement_base(exported, output, owner, peer, *, include_voice=False):
     """Clear only the selected chat in a new derived copy; retain immutable export."""
     output = ops.fresh(output)
-    for rel in database_rels(exported):
+    for rel in (*database_rels(exported), *((MEDIA,) if include_voice else ())):
         dest = output / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(Path(exported) / rel, dest)
+    if include_voice:
+        from .voice import schema
+        with write_connect(output / MEDIA) as c:
+            schema(c)
+            c.execute('DELETE FROM VoiceInfo WHERE chat_name_id IN '
+                      '(SELECT rowid FROM Name2Id WHERE user_name=?)', (peer,))
     removed = 0
     table = table_for(peer)
     for rel in message_rels(output):
@@ -43,7 +52,7 @@ def replacement_base(exported, output, owner, peer):
     return removed, old[0] if old else ''
 
 
-def make_replace_plan(a, b, output):
+def make_replace_plan(a, b, output, *, include_voice=False, include_attachments=False):
     if platform.system() != 'Windows':
         raise ValueError('单会话替换预览目前仅提供 Windows 实验版')
     ops.supported_host(); ops.ensure_closed()
@@ -54,7 +63,8 @@ def make_replace_plan(a, b, output):
     for item in accounts.values():
         ops.check_owner(item['root'], item['owner'])
         root = Path(item['root']).resolve(strict=True)
-        if output.is_relative_to(root) or root.is_relative_to(output):
+        protected = root.parent if include_attachments else root
+        if output.is_relative_to(protected) or protected.is_relative_to(output):
             raise ValueError('计划目录必须位于微信数据库目录之外')
     output = ops.fresh(output)
     reports, nicknames = {}, {}
@@ -62,7 +72,7 @@ def make_replace_plan(a, b, output):
     for slot in ('B', 'A'):
         item = accounts[slot]
         plain = output / (slot + '-plain')
-        ops.export_root(item['root'], item['keys'], plain)
+        ops.export_root(item['root'], item['keys'], plain, include_voice=include_voice, include_attachments=include_attachments)
         reports[slot] = json.loads((plain / 'export-report.json').read_text(encoding='utf-8'))
         if plain_profile(plain) not in WINDOWS_PROFILES:
             raise ValueError('单向重建需要双方配套 Windows 取钥回执，不能使用 legacy 配置')
@@ -71,41 +81,85 @@ def make_replace_plan(a, b, output):
             if row is None:
                 raise ValueError('无法核对本次账号身份')
             nicknames[slot] = row[0] or '昵称未设置'
-    structure_before=replacement_schema_check(output/'B-plain',output/'A-plain',a['owner'],b['owner'])
+    if include_voice:
+        from .voice import schema
+        from .schema_checks import table_shape
+        layouts=[]
+        for slot in ('A','B'):
+            check_voice_layout(output/(slot+'-plain'))
+            with connect(output/(slot+'-plain')/MEDIA) as c:
+                schema(c)
+                tables={row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+                if tables!={'VoiceInfo','Name2Id'}:raise ValueError('Windows 语音库存在未适配表，拒绝猜测关联')
+                layouts.append([table_shape(c,name) for name in ('VoiceInfo','Name2Id')])
+        if layouts[0]!=layouts[1]:raise ValueError('A/B Windows 语音库字段或索引不同，未生成候选')
+    try:
+        structure_before=replacement_schema_check(output/'B-plain',output/'A-plain',a['owner'],b['owner'])
+    except ValueError as error:
+        try:
+            from .schema_audit import inspect_pair
+            details=inspect_pair(output/'A-plain',output/'B-plain',a['owner'],b['owner'])
+            report_path=output/'schema-diff.json';private_json(report_path,details)
+            explanation='；结构差异报告：'+str(report_path)
+        except (OSError,ValueError,RuntimeError,KeyError,TypeError,sqlite3.Error) as diagnostic_error:
+            explanation='；结构报告未生成：'+type(diagnostic_error).__name__
+        raise ValueError(str(error)+explanation) from None
     routing=routing_inventory(output/'A-plain',a['owner'],b['owner'])
     source = save_chat(output / 'B-plain', b['owner'], a['owner'], output / 'B-chat',
-                       exclude_system_messages=True, participant_identity_layout=True)
-    removed, draft = replacement_base(output / 'A-plain', output / 'replacement-base', a['owner'], b['owner'])
+                       exclude_system_messages=True, participant_identity_layout=True,
+                       include_voice=include_voice,include_attachments=include_attachments)
+    removed, draft = replacement_base(output / 'A-plain', output / 'replacement-base', a['owner'], b['owner'],include_voice=include_voice)
     directory = ops.fresh(output / 'A-plan')
-    result = routed_restore(output / 'B-chat', output / 'replacement-base', a['owner'], directory / 'recovered-plain',routing)
+    result = routed_restore(output / 'B-chat', output / 'replacement-base', a['owner'], directory / 'recovered-plain',routing,
+        include_voice=include_voice,include_attachments=include_attachments,
+        target_asset_root=Path(a['root']).resolve().parent if include_attachments else None)
     with write_connect(directory / 'recovered-plain/session/session.db') as c:
         c.execute('UPDATE SessionTable SET draft=? WHERE username=?', (draft, b['owner']))
         if source['excluded_system_messages']:
             c.execute("UPDATE SessionTable SET summary='' WHERE username=?", (b['owner'],))
     result.update(mode=MODE, removed=removed, excluded_system_messages=source['excluded_system_messages'])
+    if include_voice or include_attachments:
+        result.update(media_experimental=True,client_media_verified=False,phone_verified=False)
     result['structure_before_rebuild']=structure_before
     result['structure_check']=replacement_schema_check(output/'B-plain',directory/'recovered-plain',
         a['owner'],b['owner'],candidate=True)
-    for rel in mutable_rels(a['root']):
+    writes=(*mutable_rels(a['root']), *((MEDIA,) if include_voice else ()))
+    for rel in writes:
         with connect(directory / 'recovered-plain' / rel) as c:
             if [tuple(r) for r in c.execute('PRAGMA integrity_check')] != [('ok',)]:
                 raise ValueError('替换候选完整性检查失败')
         encrypt_database(directory / 'recovered-plain' / rel, directory / 'candidates' / rel,
                          Path(a['root']) / rel, a['keys'])
-    plan = {'version': 1, 'target_root': str(Path(a['root']).resolve()), 'target_owner': a['owner'],
+    version,caps=format_for(WINDOWS_PARTICIPANT_PROFILE,include_voice,include_attachments)
+    plan = {'version': version, 'target_root': str(Path(a['root']).resolve()), 'target_owner': a['owner'],
             'originals': reports['A']['originals'], 'candidates': {r: digest(directory / 'candidates' / r)
-            for r in mutable_rels(a['root'])}, 'report': result}
+            for r in writes}, 'report': result}
+    if version==5:
+        plan.update(capabilities=caps,read_set=list(ops.inspection_files(a['root'],include_voice)),write_set=list(writes))
+    if include_attachments:
+        plan['assets']=result['assets']
+        from .attachments import validate_plan
+        validate_plan(plan)
+        candidates=directory/'recovered-plain/attachment-candidates'
+        if candidates.exists():shutil.move(str(candidates),directory/'attachment-candidates')
     private_json(directory / 'plan.json', plan)
     private_json(directory / 'preview.json', result)
     ops.ensure_closed()
     for slot, item in accounts.items():
-        if ops.state(item['root']) != reports[slot]['originals']:
+        if ops.state(item['root'],include_voice) != reports[slot]['originals']:
             raise ValueError('预览期间账号库发生变化，请保留任务并重新生成')
     # A new coordinator version makes older desktop builds refuse this destructive
     # mode instead of displaying it as an ordinary additive sync preview.
-    manifest = {'version': 4, 'mode': MODE, 'capabilities': ['windows-single-chat-replacement',ROUTING_CAPABILITY], 'accounts': {s: {'owner': v['owner'], 'root': str(Path(v['root']).resolve()),
+    manifest = {'version': 5 if version==5 else 4, 'mode': MODE, 'capabilities': (caps if version==5 else [])+['windows-single-chat-replacement',ROUTING_CAPABILITY], 'accounts': {s: {'owner': v['owner'], 'root': str(Path(v['root']).resolve()),
                 'nickname': nicknames[s]} for s, v in accounts.items()}, 'originals': {s: r['originals'] for s, r in reports.items()},
                 'directions': {'A': {**result, 'state': 'ready', 'plan': str(directory)},
                                'B': {'added': 0, 'skipped': 0, 'state': 'source_only', 'plan': None}}}
+    if include_attachments:
+        from . import attachments as att
+        data=json.loads((output/'B-chat/conversation.json').read_text(encoding='utf-8'))
+        manifest['original_assets']={'A':result['assets']['originals'],'B':data['attachment_originals']}
+        for slot,item in accounts.items():
+            if not att.check_state(Path(item['root']).parent,manifest['original_assets'][slot]):
+                raise ValueError('预览期间媒体文件发生变化，请保留任务并重新生成')
     private_json(output / 'sync-plan.json', manifest)
     return {'plan': str(output), **manifest}

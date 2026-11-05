@@ -14,9 +14,21 @@ from chat_rescue.workflow import connect, ident, table_for, digest, private_json
 from chat_rescue.shards import message_rels, database_rels, mutable_rels, check_paths
 from chat_rescue.operations import fresh, export_root, check_owner
 from chat_rescue.runtime import require_private, ensure_closed
+from chat_rescue.schema_audit import verify_snapshot
 
 TZ = timezone(timedelta(hours=8))
 DEFERRED = {10000, 10002}
+
+
+def snapshot_options(manifest):
+    if manifest.get('version')==4:return {}
+    if manifest.get('version')==5:
+        from chat_rescue.media import windows_options
+        caps=manifest.get('capabilities',[])
+        if caps[-2:]!=['windows-single-chat-replacement','windows-verified-shard-routing']:
+            raise ValueError('unknown replacement media capabilities')
+        return windows_options({'version':5,'capabilities':caps[:-2]})
+    raise ValueError('unsupported replacement audit version')
 
 
 def error_details(error, stage):
@@ -129,11 +141,7 @@ def read_chat(root, peer, *, verify_export=False):
     root = Path(root)
     rels = database_rels(root)
     check_paths(root, rels)
-    hashes = {r: digest(root/r) for r in rels}
-    if verify_export:
-        report = json.loads((root/'export-report.json').read_text(encoding='utf-8'))
-        if report.get('exported') != hashes:
-            raise ValueError('saved export inventory/hash mismatch')
+    hashes = verify_snapshot(root) if verify_export else {r:digest(root/r) for r in rels}
     rows, shards = [], {}
     for rel in message_rels(root):
         with connect(root/rel) as c:
@@ -164,8 +172,9 @@ def changed_times(source, target):
 def audit_task(task):
     task = Path(task)
     manifest = json.loads((task/'sync-plan.json').read_text(encoding='utf-8'))
-    if manifest.get('version') != 4 or manifest.get('mode') != 'replace-a-from-b':
+    if manifest.get('mode') != 'replace-a-from-b':
         raise ValueError('not a single-conversation replacement plan')
+    options=snapshot_options(manifest)
     a, b = manifest['accounts']['A'], manifest['accounts']['B']
     for slot,item in (('A',a),('B',b)):
         exported=json.loads((task/(slot+'-plain')/'export-report.json').read_text(encoding='utf-8'))
@@ -186,7 +195,8 @@ def audit_task(task):
         raise ValueError('bundle count mismatch')
     candidate, candidate_rows = read_chat(task/'A-plan/recovered-plain', b['owner'])
     plan = json.loads((task/'A-plan/plan.json').read_text(encoding='utf-8'))
-    rels = mutable_rels(task/'A-plan/recovered-plain')
+    rels = (*mutable_rels(task/'A-plan/recovered-plain'),
+            *(('message/media_0.db',) if options.get('include_voice') else ()))
     if set(plan['candidates']) != set(rels):
         raise ValueError('candidate shard inventory mismatch')
     check_paths(task/'A-plan/candidates', rels)
@@ -195,6 +205,8 @@ def audit_task(task):
     result = json.loads(result_path.read_text(encoding='utf-8')) if result_path.exists() else {}
     applied = result.get('accounts', {}).get('A', {})
     report = {'version':1, 'audit_only':True, 'live_databases_modified':False, 'task_id':task.parent.name,
+              'snapshot_options':options,'diagnostic_scope':'message_ids_dates_and_database_hashes',
+              'client_media_playback_checked':False,
               'application_state':result.get('state','not_applied'),
               'A_application_state':applied.get('state','not_applied'),
               'encrypted_candidates_match_plan':hashes_valid,
@@ -258,7 +270,7 @@ def main():
             ensure_closed()
             check_owner(a['root'],a['owner']);require_private(a['keys'])
             with progress.stage('3/4 只读复制并导出当前 A（大数据库可能需要数分钟）'):
-                export_root(a['root'],a['keys'],output/'A-current-plain')
+                export_root(a['root'],a['keys'],output/'A-current-plain',**report.get('snapshot_options',{}))
                 current, current_rows=read_chat(output/'A-current-plain',b['owner'],verify_export=True)
             report['A_current_snapshot']=current
             report['bundle_missing_from_current_A']=missing_by_month(source_rows,current_rows)

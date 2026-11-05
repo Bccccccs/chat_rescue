@@ -11,6 +11,7 @@ from chat_rescue.workflow import connect, ident, table_for, digest, private_json
 from chat_rescue.shards import database_rels, message_rels, check_paths
 from chat_rescue.operations import fresh
 from chat_rescue.runtime import require_private
+from chat_rescue.schema_audit import verify_snapshot
 
 TZ=timezone(timedelta(hours=8))
 
@@ -64,10 +65,7 @@ def metadata(c,tables,peer):
 
 def inspect_snapshot(root,peer,*,verify_export=False):
     root=Path(root);rels=database_rels(root);check_paths(root,rels)
-    before={rel:digest(root/rel) for rel in rels}
-    if verify_export:
-        receipt=json.loads((root/'export-report.json').read_text(encoding='utf-8'))
-        if receipt.get('exported')!=before:raise ValueError('saved snapshot hashes changed')
+    before=verify_snapshot(root) if verify_export else {rel:digest(root/rel) for rel in rels}
     result={'message_shards':{}}
     table=table_for(peer)
     for rel in message_rels(root):
@@ -158,7 +156,9 @@ def main():
             raise ValueError('invalid saved task identifier')
         task=workspace/'jobs'/receipt['task_id']/'sync'
         manifest=json.loads((task/'sync-plan.json').read_text(encoding='utf-8'))
-        if manifest.get('version')!=4 or manifest.get('mode')!='replace-a-from-b':continue
+        if manifest.get('version') not in (4,5) or manifest.get('mode')!='replace-a-from-b':continue
+        from chat_rescue.history_audit import snapshot_options
+        snapshot_options(manifest)
         if all(manifest['accounts'][slot]['owner']==item['owner'] and
             Path(manifest['accounts'][slot]['root']).resolve()==Path(item['root']).resolve()
             for slot,item in zip(('A','B'),accounts)):

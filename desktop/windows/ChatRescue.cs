@@ -27,6 +27,7 @@ public class Wizard : Window {
     int step; bool busy, prepared, identityConfirmed, previewConfirmed, clientConfirmed, loadedSettings;
     readonly bool[] accountVerified = { false, false };
     readonly SourceImportFlow sourceImport = new SourceImportFlow();
+    bool includeVoice, includeAttachments;
 
     static Brush ColorBrush(string hex) { return new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)); }
     static Dictionary<string, object> Account() { return D("owner", "", "root", "", "keys", "", "nickname", ""); }
@@ -65,7 +66,7 @@ public class Wizard : Window {
         var bottom=new StackPanel{Margin=new Thickness(23,20,15,25)};
         bottom.Children.Add(Link("一步一步使用指南",delegate { MessageBox.Show(this,"1. 检查环境并选择腾讯原版微信。\n2. 先打开 A，本人登录并读取核验。正常退出微信后再打开 B，登录后将手机 B 中与 A 的聊天导入电脑 B（已完整存在则直接核对），确认后读取 B。\n3. 两个账号核验完成、微信正常退出后生成预览。已有密钥可退出后直接读取验证。\n4. 核对昵称、数量、方向，确认后才应用。\n5. 在原版微信核对显示；手机迁移单独验收。\n\n遇到冲突或空白账号未初始化时停止，保留原件，不删除聊天。","使用指南"); }));
         bottom.Children.Add(Link("载入隔离测试报告",LoadSimulation));
-        bottom.Children.Add(Text("0.5.5 · Windows 实验版",11,muted));
+        bottom.Children.Add(Text("0.5.6 · Windows 实验版",11,muted));
         bottom.Children.Add(Link("开源许可",delegate{OpenDirectory(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"licenses"));}));DockPanel.SetDock(bottom,Dock.Bottom); side.Children.Add(bottom);
         nav=new StackPanel{Margin=new Thickness(12,0,12,0)}; side.Children.Add(nav);
         for(int i=0;i<5;i++){int index=i; steps[i]=Button((i+1)+"   "+titles[i],delegate{step=index;Render();});steps[i].HorizontalContentAlignment=HorizontalAlignment.Left;steps[i].Margin=new Thickness(0,0,0,10);steps[i].Padding=new Thickness(16,15,8,15); nav.Children.Add(steps[i]);}
@@ -136,10 +137,11 @@ public class Wizard : Window {
         }
         var actions=Row(card);actions.Children.Add(Button("导入已有密钥",delegate{var f=new OpenFileDialog{Filter="私有密钥清单|*.json"};if(f.ShowDialog(this)==true){accounts[index]["keys"]=f.FileName;accountVerified[0]=accountVerified[1]=false;sourceImport.Reset();InvalidatePlan();Render();}}));
         Para(card,"导入已有密钥时，请保留同目录的配套取钥回执，例如 keys.json 与 keys.capture.json；缺少回执可能导致预览方向校验失败。");
-        var read=Button("读取账号 "+slot,delegate{Run("正在核验账号 "+slot+"：已登录时取钥，已退出时验证已有密钥…",D("action","capture","slot",slot,"account",accounts[index],"identity_confirmed",identityConfirmed,"source_history_confirmed",sourceImport.Confirmed,"executable",executable),delegate(Dictionary<string,object> r){accounts[index]=Obj(Get(r,"account"));accountVerified[index]=true;if(index==0){accountVerified[1]=false;sourceImport.Reset();}InvalidatePlan();SetStatus(index==0?"A 已核验："+AccountName(0)+"。请从微信菜单正常退出，再打开 B，导入并核对手机 B 中与 A 的聊天。":"B 已核验："+AccountName(1)+"。请正常退出微信，再生成 B → A 替换预览。");Render();});},true);read.IsEnabled=identityConfirmed && S(accounts[index],"root").Length>0 && sourceImport.CanRead(slot,accountVerified[0]);actions.Children.Add(read);
+        var read=Button("读取账号 "+slot,delegate{Run("正在核验账号 "+slot+"：已登录时取钥，已退出时验证已有密钥…",D("action","capture","slot",slot,"account",accounts[index],"identity_confirmed",identityConfirmed,"source_history_confirmed",sourceImport.Confirmed,"executable",executable,"include_voice",includeVoice,"include_attachments",includeAttachments),delegate(Dictionary<string,object> r){accounts[index]=Obj(Get(r,"account"));accountVerified[index]=true;if(index==0){accountVerified[1]=false;sourceImport.Reset();}InvalidatePlan();SetStatus(index==0?"A 已核验："+AccountName(0)+"。请从微信菜单正常退出，再打开 B，导入并核对手机 B 中与 A 的聊天。":"B 已核验："+AccountName(1)+"。请正常退出微信，再生成 B → A 替换预览。");Render();});},true);read.IsEnabled=identityConfirmed && S(accounts[index],"root").Length>0 && sourceImport.CanRead(slot,accountVerified[0]);actions.Children.Add(read);
     }
 
     void Login(){
+        MediaOptions();
         var card=Card(page);Heading(card,accountVerified[1]?"A、B 本次核验已完成":accountVerified[0]?"接下来处理 B · "+AccountName(1):"当前先处理 A · "+AccountName(0));Para(card,"A 是希望恢复记录的目标账号；B 是提供保留记录的源账号。\n1   打开 A → 本人登录 → 核对账号并点击“读取账号 A”。\n2   从微信菜单正常退出整个程序 → 打开 B → 登录 → 将手机 B 中与 A 的聊天导入电脑 B → 核对完整后读取 B。\n每次只打开一个微信。如果登录页记住的是另一账号，请本人切换到本次账号。已有密钥且微信已退出时，可直接读取验证，无需重复登录。");
         var check=new CheckBox{Content="我确认所选 A、B 是本次双方授权的两个账号",IsChecked=identityConfirmed,Margin=new Thickness(0,12,0,12)};check.Click+=delegate{identityConfirmed=check.IsChecked==true;InvalidatePlan();Render();};card.Children.Add(check);
         var buttons=Row(card);
@@ -152,17 +154,31 @@ public class Wizard : Window {
     }
 
     void Reading(){
+        MediaOptions();
         var card=Card(page);Heading(card,"验证、备份与单向替换预览");Para(card,"本版只用 B 重建 A 中与 B 的会话。A 原会话仅在候选中移除；确认具体替换预览后才应用。系统类型 10000、10002 暂不导入并统计，其他未知方向拒绝。");Para(card,"1   先打开 A，登录并读取 A；正常退出后再打开 B，导入并核对手机 B 中与 A 的聊天后读取 B。");Para(card,"2   B 核验完成后，从微信菜单正常退出整个程序。已有密钥且微信已退出时可直接读取验证。");Para(card,"3   点击生成预览。软件检查退出状态、保存 DB/WAL/SHM 原件，再建立恢复候选。");
         var check=new CheckBox{Content="我已核对两个账号及双方授权",IsChecked=identityConfirmed,Margin=new Thickness(0,10,0,12)};check.Click+=delegate{identityConfirmed=check.IsChecked==true;InvalidatePlan();Render();};card.Children.Add(check);
         var blocks=new Grid();blocks.ColumnDefinitions.Add(new ColumnDefinition());blocks.ColumnDefinitions.Add(new ColumnDefinition());card.Children.Add(blocks);
         for(int i=0;i<2;i++){var p=new StackPanel{Margin=new Thickness(0,8,10,0)};Grid.SetColumn(p,i);blocks.Children.Add(p);AccountCard(i,p);}
-        var generate=Button("微信已退出，生成 B → A 替换预览",delegate{InvalidatePlan();Run("正在备份、读取并生成预览，请不要启动微信…",D("action","plan","a",accounts[0],"b",accounts[1],"identity_confirmed",identityConfirmed,"source_history_confirmed",sourceImport.Confirmed),delegate(Dictionary<string,object> r){plan=r;simulation=null;step=3;SetStatus("候选已生成。请核对身份与数量，确认后才会应用。");Render();});},true);
+        var generate=Button("微信已退出，生成 B → A 替换预览",delegate{InvalidatePlan();Run("正在备份、读取并生成预览，请不要启动微信…",D("action","plan","a",accounts[0],"b",accounts[1],"identity_confirmed",identityConfirmed,"source_history_confirmed",sourceImport.Confirmed,"include_voice",includeVoice,"include_attachments",includeAttachments),delegate(Dictionary<string,object> r){plan=r;simulation=null;step=3;SetStatus("候选已生成。请核对身份与数量，确认后才会应用。");Render();});},true);
         generate.IsEnabled=identityConfirmed && accountVerified[0] && accountVerified[1] && sourceImport.Confirmed;Row(card).Children.Add(generate);
         Row(card).Children.Add(Button("载入上次隔离测试报告",LoadSimulation));
     }
 
     string Summary(){if(plan==null)return "";var names=Obj(Get(plan,"accounts"));var dirs=Obj(Get(plan,"directions"));if(S(plan,"mode")=="replace-a-from-b"){var d=Obj(Get(dirs,"A"));int excluded=0;foreach(var value in Obj(Get(d,"excluded_system_messages")).Values)excluded+=Convert.ToInt32(value);return "目标 A："+S(Obj(Get(names,"A")),"nickname")+"\n来源 B："+S(Obj(Get(names,"B")),"nickname")+"\nA 中此会话将移除 "+N(d,"removed")+" 条，从 B 导入 "+N(d,"added")+" 条\n暂不导入系统条目 "+excluded+" 条；B 只读，不应用写入。";}var s=new StringBuilder();for(int i=0;i<2;i++){string slot=i==0?"A":"B";var d=Obj(Get(dirs,slot));s.AppendLine(S(Obj(Get(names,slot)),"nickname")+"：新增 "+N(d,"added")+"，去重 "+N(d,"skipped"));}return s.ToString();}
     bool RoutedPlan(){var d=Obj(Get(Obj(Get(plan,"directions")),"A"));return S(Obj(Get(d,"structure_check")),"state")=="matched"&&A(Get(d,"target_shard_imports")).Length>0;}
+    void MediaOptions(){
+        var card=Card(page);Heading(card,"媒体本体恢复 · 实验功能");
+        var voice=new CheckBox{Content="同时恢复原语音（需要双方媒体库密钥）",IsChecked=includeVoice,Margin=new Thickness(0,6,0,8)};
+        voice.Click+=delegate{includeVoice=voice.IsChecked==true;accountVerified[0]=false;accountVerified[1]=false;InvalidatePlan();SetStatus("语音选项已改变，请按 A、B 顺序重新读取，核验媒体库密钥。");Render();};card.Children.Add(voice);
+        var attachments=new CheckBox{Content="同时恢复图片、视频和文件本体",IsChecked=includeAttachments,Margin=new Thickness(0,6,0,8)};
+        attachments.Click+=delegate{includeAttachments=attachments.IsChecked==true;InvalidatePlan();Render();};card.Children.Add(attachments);
+        Para(card,"仅恢复 B 已完整下载且能核对关联的内容。图片加密需可验证的账号证据；缺失、未知格式或冲突会停止。先通过离线检查，再由本人在 A 微信逐项打开或播放验收，手机迁移另行验收。");
+    }
+    string MediaSummary(){
+        var d=Obj(Get(Obj(Get(plan,"directions")),"A"));
+        if(!B(d,"media_experimental"))return "本次仅导入消息条目，未启用媒体本体恢复。";
+        return "媒体候选：图片 "+(N(d,"image_added")+N(d,"image_repaired"))+"，语音 "+(N(d,"voice_added")+N(d,"voice_repaired"))+"，视频 "+(N(d,"video_added")+N(d,"video_repaired"))+"，文件 "+(N(d,"file_added")+N(d,"file_repaired"))+"。\n媒体原件：A-plan/original-assets；语音库原件：A-plan/originals/message/media_0.db。只有勾选的类型参与本次计划。\n离线候选已核验；微信内打开、播放及手机迁移尚未验收。";
+    }
     string RoutingSummary(){var d=Obj(Get(Obj(Get(plan,"directions")),"A"));if(!RoutedPlan())return "此旧计划缺少结构与分片验证，请用新版重新生成预览。";var text=new StringBuilder("A/B 必需结构及候选会话字段、索引核对通过。\n");foreach(var value in A(Get(d,"target_shard_imports"))){var item=Obj(value);var epoch=new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc);text.AppendLine(S(item,"path")+"：导入 "+N(item,"imported")+" 条，"+epoch.AddSeconds(Convert.ToDouble(Get(item,"first_timestamp"))).ToLocalTime().ToString("yyyy-MM-dd")+" 至 "+epoch.AddSeconds(Convert.ToDouble(Get(item,"last_timestamp"))).ToLocalTime().ToString("yyyy-MM-dd"));}text.Append("仅清理此会话失效的搜索范围；微信搜索重建与实际显示仍待验收。");return text.ToString();}
     string StateLabel(string value){switch(value){case "ready":return "候选已验证，等待本人确认";case "applied":return "应用完成";case "partial":return "部分完成，请查看各侧回执";case "interrupted":return "可能中断，禁止重复应用";case "failed":return "未完成，请保留回执";case "undone":return "已撤回";default:return "需要核对本机回执";}}
     void Preview(){
@@ -170,6 +186,7 @@ public class Wizard : Window {
         if(plan==null){var c=Card(page);Heading(c,"还没有可应用的恢复预览");Para(c,"先读取两个账号并生成候选，或载入已有的任务目录。");Row(c).Children.Add(Button("返回读取聊天",delegate{step=2;Render();},true));Row(c).Children.Add(Button("载入历史任务",LoadPlan));return;}
         var card=Card(page);Heading(card,"B → A 单会话替换预览");card.Children.Add(Text(Summary(),22,blue,true));Para(card,S(plan,"mode")=="replace-a-from-b"?"确认后将替换 A 中与 B 的整段会话，A 独有的消息也会移出当前会话；其他会话保留，B 不写入。旧会话完整原件保存在任务目录，真实消息编号与收发身份按 A 视角转换。":"这是旧版双向任务，仅供查看；本版请重新生成 B → A 替换预览。");Para(card,"当前任务状态："+StateLabel(S(plan,"state")));Para(card,"任务与原件目录："+S(plan,"plan"));
         Para(card,RoutingSummary());
+        Para(card,MediaSummary());
         var check=new CheckBox{Content="已核对双方昵称、数量、时间范围、收发方向，并同意应用本次计划",IsChecked=previewConfirmed,Margin=new Thickness(0,14,0,12)};
         var apply=Button("确认用 B 重建 A 的会话",Apply,true);apply.IsEnabled=previewConfirmed && S(plan,"state")=="ready" && S(plan,"mode")=="replace-a-from-b"&&RoutedPlan();
         check.Click+=delegate{previewConfirmed=check.IsChecked==true;apply.IsEnabled=previewConfirmed&&S(plan,"state")=="ready"&&S(plan,"mode")=="replace-a-from-b"&&RoutedPlan();};card.Children.Add(check);Row(card).Children.Add(apply);Row(card).Children.Add(Button("打开任务目录",delegate{OpenDirectory(S(plan,"plan"));}));
@@ -186,7 +203,7 @@ public class Wizard : Window {
     void Result(){
         var card=Card(page);Heading(card,"分阶段核对结果");
         Para(card,plan==null?"数据库：尚未载入真实任务回执":"数据库状态："+StateLabel(S(plan,"state")));Para(card,clientConfirmed?"电脑显示：本人已确认":"电脑显示：尚未由本人确认");Para(card,"手机迁移：未验收 · 不会自动同步到手机");
-        Para(card,"请在原版微信核对联系人、收发方向、时间、正文或卡片，以及已有消息。消息条目恢复不代表附件完整。");
+        Para(card,"请在原版微信核对联系人、收发方向、时间、正文或卡片，以及已有消息。启用媒体模式时，还请逐项打开图片、视频和文件并播放语音；缺失或不能打开时保留原件与回执。");
         var confirm=Button("我已在电脑微信逐项核对",delegate{if(plan==null)return;Run("正在记录本人的电脑验收…",D("action","confirm-client","plan",S(plan,"plan"),"plan_hash",S(plan,"plan_hash"),"confirmed",true),delegate{clientConfirmed=true;SetStatus("已记录本人电脑显示确认；手机迁移仍未验收。");Render();});},true);confirm.IsEnabled=plan!=null&&S(plan,"state")=="applied"&&!clientConfirmed;Row(card).Children.Add(confirm);
         if(plan!=null)Row(card).Children.Add(Button("打开原件与报告目录",delegate{OpenDirectory(S(plan,"plan"));}));
         if(plan!=null && S(plan,"state")=="applied")Row(card).Children.Add(Button("撤回本次替换",delegate{if(MessageBox.Show(this,"仅在两个账号都没有新消息或数据库变化时允许撤回。撤回前还会保存当前原件。\n\n确认撤回这份任务？\n"+Summary(),"确认撤回",MessageBoxButton.OKCancel,MessageBoxImage.Question)!=MessageBoxResult.OK)return;Run("正在核对后续变化并撤回…",D("action","undo","plan",S(plan,"plan"),"plan_hash",S(plan,"plan_hash"),"confirmed",true),delegate(Dictionary<string,object> result){plan["state"]=S(result,"state");clientConfirmed=false;SetStatus("已撤回本次替换，请保留撤回前原件并检查微信。");Render();});}));
