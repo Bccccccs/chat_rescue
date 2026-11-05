@@ -263,6 +263,8 @@ def dispatch(request):
             raise ValueError('请确认这份具体预览后再应用')
         if view['state'] != 'ready':
             raise ValueError('此任务已有回执或中断标记，不能再次应用')
+        if view.get('mode')=='replace-a-from-b' and not view['directions']['A'].get('target_shard_imports'):
+            raise ValueError('旧替换计划未验证分片分配，请保留任务并用新版重新生成预览')
         return apply_sync_plan(view['plan'])
     if action == 'undo':
         view = guarded_plan(request)

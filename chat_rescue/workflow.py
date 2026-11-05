@@ -386,7 +386,7 @@ def _insert(c, table, row):
                      + ') VALUES (' + ','.join('?' for _ in row) + ')', tuple(row.values())).lastrowid
 
 
-def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_voice=False, include_attachments=False, target_asset_root=None):
+def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_voice=False, include_attachments=False, target_asset_root=None, destination_shard=None):
     os.umask(0o077)
     bundle, target_root, output = Path(bundle), Path(target_root), Path(output)
     manifest = json.loads((bundle / 'manifest.json').read_text(encoding='utf-8'))
@@ -442,6 +442,14 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
                 containing.append(rel)
                 max_local_id = max(max_local_id, c.execute('SELECT coalesce(max(local_id),0) FROM ' + ident(table)).fetchone()[0])
     destination = (containing or list(shards))[-1]
+    if destination_shard is not None:
+        if (source_profile!=WINDOWS_PARTICIPANT_PROFILE or target_profile!=WINDOWS_PARTICIPANT_PROFILE
+                or include_voice or include_attachments or destination_shard not in shards):
+            raise ValueError('显式分片仅允许已有 Windows participant-ids 消息分片')
+        destination=destination_shard
+        with connect(target_root/destination) as target:
+            max_local_id=(target.execute('SELECT coalesce(max(local_id),0) FROM '+ident(table)).fetchone()[0]
+                          if table in message_tables(target) else 0)
     with connect(target_root / 'contact/contact.db') as c:
         target_contacts = {r['username']: dict(r) for r in c.execute('SELECT * FROM contact WHERE username IN (?,?)', (target_owner, peer))}
         users = set(target_contacts)
@@ -472,6 +480,8 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
             raise ValueError('target owner missing from message identity mapping')
         own_id = own_row[0]
         peer_id = _mapping(c, 'Name2Id', peer, is_session=1)
+        if destination_shard is not None:
+            c.execute('UPDATE Name2Id SET is_session=1 WHERE rowid=?',(peer_id,))
         if not c.execute('SELECT name FROM sqlite_master WHERE name=?', (table,)).fetchone():
             expected_source = table_for(data['peer'])
             if data['source_table'] != expected_source or not data['schema'].startswith('CREATE TABLE ' + expected_source + '('):

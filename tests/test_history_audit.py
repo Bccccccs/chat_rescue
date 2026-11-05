@@ -95,16 +95,22 @@ class HistoryAuditTests(unittest.TestCase):
     def test_failure_writes_report_and_progress_before_doing_any_snapshot(self):
         local=Path(self.tmp.name)/'local'
         with patch.dict(os.environ,{'LOCALAPPDATA':str(local)}), \
-             patch.object(audit,'ensure_closed',side_effect=RuntimeError('synthetic open client')), \
+             patch.object(audit,'require_private',side_effect=RuntimeError('key file must be private (chmod 600)')), \
              patch.object(audit,'export_root') as export, redirect_stdout(io.StringIO()) as console:
             self.assertEqual(audit.main(),1)
         output=next((local/'ChatRescue/Desktop').glob('history-audit-*'))
         report=json.loads((output/'history-audit.json').read_text(encoding='utf-8'))
         self.assertEqual(report['audit_state'],'failed')
-        self.assertEqual(report['stage'],'startup')
+        self.assertEqual(report['stage'],'load_settings')
+        self.assertEqual(report['error']['code'],'private_acl_failed')
         self.assertTrue((output/'progress.log').stat().st_size)
-        self.assertIn('History Audit v2 starting',console.getvalue())
+        self.assertIn('History Audit v3 starting',console.getvalue())
         export.assert_not_called()
+
+    def test_unclassified_errors_do_not_include_sensitive_exception_text(self):
+        detail=audit.error_details(ValueError('synthetic-private-key-and-account'),'saved_task')
+        self.assertEqual(detail['code'],'unclassified_error')
+        self.assertNotIn('synthetic-private',json.dumps(detail))
 
 
 @unittest.skipUnless(os.name=='nt','Windows private-snapshot history audit')
@@ -149,3 +155,17 @@ class SnapshotAuditTests(unittest.TestCase):
         current=json.loads((output/'A-current-chat/conversation.json').read_text(encoding='utf-8'))
         self.assertEqual((current['owner'],current['peer']),(A,B))
         self.assertNotIn(A,json.dumps(report));self.assertNotIn(B,json.dumps(report))
+        with patch.object(audit,'ensure_closed',side_effect=RuntimeError(
+                '请从微信菜单正常退出所有微信（关闭窗口可能仍驻留托盘）后重试')), \
+             patch.object(audit,'export_root') as export, \
+             patch.dict(os.environ,{'LOCALAPPDATA':str(local)}),redirect_stdout(io.StringIO()):
+            self.assertEqual(audit.main(),2)
+            export.assert_not_called()
+        second=next(folder for folder in workspace.glob('history-audit-*') if folder!=output)
+        blocked=json.loads((second/'history-audit.json').read_text(encoding='utf-8'))
+        self.assertEqual(blocked['audit_state'],'partial')
+        self.assertEqual(blocked['A_current_export_error']['code'],'wechat_running')
+        self.assertEqual(blocked['bundle_missing_from_candidate'],{})
+        self.assertTrue((second/'A-candidate-chat/conversation.json').is_file())
+        self.assertFalse((second/'A-current-plain').exists())
+        self.assertEqual(ops.state(a),before_a);self.assertEqual(ops.state(b),before_b)

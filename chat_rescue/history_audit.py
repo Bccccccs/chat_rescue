@@ -19,6 +19,32 @@ TZ = timezone(timedelta(hours=8))
 DEFERRED = {10000, 10002}
 
 
+def error_details(error, stage):
+    """Explain known guard failures without exposing arbitrary paths or key data."""
+    known = {
+        '请从微信菜单正常退出所有微信（关闭窗口可能仍驻留托盘）后重试':
+            ('wechat_running','微信或微信子进程仍在运行','请从微信菜单正常退出所有微信，包括托盘中的微信，再运行检查。'),
+        '请用 ⌘Q 正常退出原版及副本微信后重试':
+            ('wechat_running','微信仍在运行','请正常退出原版及副本微信后再运行检查。'),
+        '无法核对 Windows 进程清单，拒绝继续':
+            ('process_check_failed','无法核对 Windows 进程清单','请提供此报告；当前库快照未执行。'),
+        'Windows 资料可被其他用户访问；请放入仅本人可访问的私有目录':
+            ('private_acl_failed','设置或密钥文件可被其他用户访问','请提供此报告以定位文件权限；不要关闭权限检查。'),
+        'Windows 私有资料不能使用空 DACL':
+            ('private_acl_failed','私有文件权限为空','请提供此报告以定位文件权限；不要关闭权限检查。'),
+        'key file must be private (chmod 600)':
+            ('private_acl_failed','文件访问权限不符合私有资料要求','请提供此报告以定位文件权限。'),
+        'no matching saved replacement task':
+            ('matching_task_missing','当前所选账号与已有替换任务不匹配','请提供此报告，保留已有任务，不重新应用恢复。'),
+    }
+    code,reason,action=known.get(str(error),(
+        'unclassified_error','该步骤未完成：'+type(error).__name__,
+        '请提供 history-audit.json 和 progress.log，保留已有任务，不重新应用恢复。'))
+    if isinstance(error,FileNotFoundError):
+        code,reason='local_file_missing','此步骤需要的本机文件不存在'
+    return {'stage':stage,'code':code,'reason':reason,'next_action':action}
+
+
 class Progress:
     def __init__(self, output):
         self.output = output
@@ -200,33 +226,36 @@ def selected_task(workspace, accounts):
 
 
 def main():
-    print('History Audit v2 starting / 历史记录检查启动', flush=True)
+    print('History Audit v3 starting / 历史记录检查启动', flush=True)
     workspace=Path(os.environ['LOCALAPPDATA'])/'ChatRescue/Desktop'
     output=fresh(workspace/('history-audit-'+uuid.uuid4().hex))
     progress=Progress(output)
     progress.say('输出目录：'+str(output))
-    report={'version':2,'audit_only':True,'live_databases_modified':False,
+    report={'version':3,'audit_only':True,'live_databases_modified':False,
             'audit_state':'running','stage':'startup'}
     save_report(output,report)
     try:
-        # Snapshot current A only after a normal client exit. Never stop a process.
-        progress.say('1/4 检查微信退出状态及已有任务')
-        ensure_closed()
+        # Saved snapshots can be audited while a client is open. The live export
+        # below still requires normal client exit and all original guard checks.
+        progress.say('1/4 读取已有任务设置（不访问当前微信库）')
+        report['stage']='load_settings';save_report(output,report)
         settings=workspace/'settings.json';require_private(settings)
         accounts=json.loads(settings.read_text(encoding='utf-8'))['accounts']
+        report['stage']='select_task';save_report(output,report)
         task=selected_task(workspace,accounts)
         a,b=accounts
         report['stage']='saved_task';save_report(output,report)
         with progress.stage('2/4 比较 B 导出、A 候选及应用回执'):
             saved, source_rows=audit_task(task)
             report.update(saved)
-        report.update(version=2,audit_state='running',stage='current_A_snapshot',A_current_export_state='pending')
+        report.update(version=3,audit_state='running',stage='current_A_snapshot',A_current_export_state='pending')
         save_report(output,report)
         progress.say('已有任务的月份报告已保存：history-audit.json')
         library=Path(sys.executable).parent/'e_sqlcipher.dll'
         if library.is_file():os.environ['SQLCIPHER_LIBRARY']=str(library)
         current_available=False
         try:
+            ensure_closed()
             check_owner(a['root'],a['owner']);require_private(a['keys'])
             with progress.stage('3/4 只读复制并导出当前 A（大数据库可能需要数分钟）'):
                 export_root(a['root'],a['keys'],output/'A-current-plain')
@@ -239,7 +268,9 @@ def main():
         except (OSError,ValueError,RuntimeError,sqlite3.Error) as error:
             report['A_current_export_state']='failed'
             report['A_current_export_error_class']=type(error).__name__
-            progress.say('当前 A 快照检查失败：'+type(error).__name__+'；已有任务报告仍保留')
+            report['A_current_export_error']=error_details(error,'current_A_snapshot')
+            progress.say('当前 A 快照未完成：'+report['A_current_export_error']['reason'])
+            progress.say(report['A_current_export_error']['next_action'])
         report['stage']='local_json';save_report(output,report)
         # Fast raw diagnostic JSONs are local viewing files, never restore bundles.
         with progress.stage('4/4 生成仅供本机查看的 A 对话 JSON'):
@@ -253,6 +284,7 @@ def main():
                     progress.say('A '+label+' JSON 已保存，条数：'+str(count))
                 except (OSError,ValueError,sqlite3.Error) as error:
                     report['A_'+label+'_json_error_class']=type(error).__name__
+                    report['A_'+label+'_json_error']=error_details(error,'A_'+label+'_json')
                 save_report(output,report)
         errors=any(key.endswith('_error_class') for key in report)
         report.update(audit_state='partial' if errors else 'completed',stage='finished')
@@ -262,8 +294,10 @@ def main():
         return 2 if errors else 0
     except (OSError,ValueError,KeyError,TypeError,RuntimeError,sqlite3.Error) as error:
         report.update(audit_state='failed',error_class=type(error).__name__)
+        report['error']=error_details(error,report['stage'])
         save_report(output,report)
-        progress.say('检查未完成：'+type(error).__name__+'；请提供 history-audit.json 和 progress.log')
+        progress.say('检查未完成：'+report['error']['reason'])
+        progress.say(report['error']['next_action'])
         return 1
 
 

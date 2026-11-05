@@ -6,8 +6,10 @@ from pathlib import Path
 from . import operations as ops
 from .cipher import encrypt_database
 from .workflow import (connect, write_connect, ident, table_for, digest, private_json,
-                       plain_profile, WINDOWS_PROFILES, WINDOWS_PARTICIPANT_PROFILE, save_chat, prepare_plain_restore)
+                       plain_profile, WINDOWS_PROFILES, WINDOWS_PARTICIPANT_PROFILE, save_chat)
 from .shards import database_rels, message_rels, mutable_rels
+from .schema_checks import replacement_schema_check
+from .routing import routing_inventory, routed_restore, CAPABILITY as ROUTING_CAPABILITY
 
 MODE = 'replace-a-from-b'
 
@@ -69,16 +71,21 @@ def make_replace_plan(a, b, output):
             if row is None:
                 raise ValueError('无法核对本次账号身份')
             nicknames[slot] = row[0] or '昵称未设置'
+    structure_before=replacement_schema_check(output/'B-plain',output/'A-plain',a['owner'],b['owner'])
+    routing=routing_inventory(output/'A-plain',a['owner'],b['owner'])
     source = save_chat(output / 'B-plain', b['owner'], a['owner'], output / 'B-chat',
                        exclude_system_messages=True, participant_identity_layout=True)
     removed, draft = replacement_base(output / 'A-plain', output / 'replacement-base', a['owner'], b['owner'])
     directory = ops.fresh(output / 'A-plan')
-    result = prepare_plain_restore(output / 'B-chat', output / 'replacement-base', a['owner'], directory / 'recovered-plain')
+    result = routed_restore(output / 'B-chat', output / 'replacement-base', a['owner'], directory / 'recovered-plain',routing)
     with write_connect(directory / 'recovered-plain/session/session.db') as c:
         c.execute('UPDATE SessionTable SET draft=? WHERE username=?', (draft, b['owner']))
         if source['excluded_system_messages']:
             c.execute("UPDATE SessionTable SET summary='' WHERE username=?", (b['owner'],))
     result.update(mode=MODE, removed=removed, excluded_system_messages=source['excluded_system_messages'])
+    result['structure_before_rebuild']=structure_before
+    result['structure_check']=replacement_schema_check(output/'B-plain',directory/'recovered-plain',
+        a['owner'],b['owner'],candidate=True)
     for rel in mutable_rels(a['root']):
         with connect(directory / 'recovered-plain' / rel) as c:
             if [tuple(r) for r in c.execute('PRAGMA integrity_check')] != [('ok',)]:
@@ -96,7 +103,7 @@ def make_replace_plan(a, b, output):
             raise ValueError('预览期间账号库发生变化，请保留任务并重新生成')
     # A new coordinator version makes older desktop builds refuse this destructive
     # mode instead of displaying it as an ordinary additive sync preview.
-    manifest = {'version': 4, 'mode': MODE, 'capabilities': ['windows-single-chat-replacement'], 'accounts': {s: {'owner': v['owner'], 'root': str(Path(v['root']).resolve()),
+    manifest = {'version': 4, 'mode': MODE, 'capabilities': ['windows-single-chat-replacement',ROUTING_CAPABILITY], 'accounts': {s: {'owner': v['owner'], 'root': str(Path(v['root']).resolve()),
                 'nickname': nicknames[s]} for s, v in accounts.items()}, 'originals': {s: r['originals'] for s, r in reports.items()},
                 'directions': {'A': {**result, 'state': 'ready', 'plan': str(directory)},
                                'B': {'added': 0, 'skipped': 0, 'state': 'source_only', 'plan': None}}}

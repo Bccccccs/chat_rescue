@@ -270,11 +270,18 @@ def sync_options(manifest):
     a,b = manifest['accounts']['A'],manifest['accounts']['B']
     if version == 4 or manifest.get('mode') == 'replace-a-from-b':
         if (version != 4 or manifest.get('mode') != 'replace-a-from-b'
-                or caps != ['windows-single-chat-replacement']
+                or caps not in (['windows-single-chat-replacement'],
+                                ['windows-single-chat-replacement','windows-verified-shard-routing'])
                 or manifest['directions']['B']['plan'] is not None
                 or manifest['directions']['B'].get('added') != 0
                 or not manifest['directions']['A']['plan']):
             raise ValueError('单向替换计划只允许写入 A，B 必须保持只读')
+        if 'windows-verified-shard-routing' in caps:
+            checked=manifest['directions']['A']
+            if (checked.get('structure_check',{}).get('state')!='matched'
+                    or not checked.get('shard_routing',{}).get('shards')
+                    or not checked.get('target_shard_imports')):
+                raise ValueError('替换计划缺少结构一致性或分片分配验证')
     if a['owner']==b['owner'] or Path(a['root']).resolve()==Path(b['root']).resolve():
         raise ValueError('双向计划必须使用两个不同账号')
     for slot,account in manifest['accounts'].items():

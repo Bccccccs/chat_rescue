@@ -125,8 +125,13 @@ class ReplacementTests(unittest.TestCase):
         self.assertEqual(ops.state(self.target[0]), before)
 
     def test_selected_chat_removed_from_all_target_shards(self):
+        from test_routing import add_witnesses,ensure_fts
         root, keys = self.target
         (root/'message/message_2.db').write_bytes((root/'message/message_0.db').read_bytes())
+        (self.a_plain/'message/message_2.db').write_bytes((self.a_plain/'message/message_0.db').read_bytes())
+        add_witnesses(self.a_plain,'message/message_0.db',1699999900,1700000000,'old')
+        add_witnesses(self.a_plain,'message/message_2.db',1700000001,1700000100,'new')
+        ensure_fts(self.b_plain);self.install(self.source,self.b_plain)
         payload=json.loads(keys.read_text(encoding='utf-8'))
         payload['keys']['message/message_2.db']=payload['keys']['message/message_0.db']
         keys.write_text(json.dumps(payload),encoding='utf-8')
@@ -134,6 +139,10 @@ class ReplacementTests(unittest.TestCase):
         value=json.loads(receipt.read_text(encoding='utf-8'))
         value.update(verified_required_databases=5,verified_databases=[*ops.ALL,'message/message_2.db'])
         receipt.write_text(json.dumps(value),encoding='utf-8')
+        self.install(self.target,self.a_plain)
+        extra=Path(str(root/'message/message_2.db')+'.new')
+        encrypt_database(self.a_plain/'message/message_2.db',extra,root/'message/message_2.db',keys)
+        os.replace(extra,root/'message/message_2.db')
         before=ops.state(root)
         with patch('chat_rescue.operations.ensure_closed'):
             result=self.plan()
@@ -148,6 +157,11 @@ class ReplacementTests(unittest.TestCase):
                     messages.extend(c.execute('SELECT server_id FROM '+table_for(B)).fetchall())
                 self.assertEqual(c.execute('SELECT server_id FROM '+table_for('wxid_unrelated_demo')).fetchall(),[(901,)])
         self.assertEqual(sorted(messages),[(101,),(102,)])
+        self.assertEqual([item['imported'] for item in result['directions']['A']['target_shard_imports']],[1,1])
+        with patch('chat_rescue.operations.ensure_closed'):
+            self.assertEqual(sync.apply_sync_plan(self.root/'replace')['state'],'applied')
+            self.assertEqual(sync.undo_sync_plan(self.root/'replace')['state'],'undone')
+        self.assertEqual(ops.state(root),before)
 
     def test_replacement_mode_rejects_any_b_write_plan(self):
         with patch('chat_rescue.operations.ensure_closed'):
