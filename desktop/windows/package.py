@@ -11,11 +11,15 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.request
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
+# Script entry points run with desktop/windows on sys.path, not the checkout.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 PYTHON_URL = 'https://www.python.org/ftp/python/3.14.10/python-3.14.10-embed-amd64.zip'
 PYTHON_SHA256 = '90905e64a840557d8c1bc4f5b74db3d7ee85e3ffb217611cac1c7813acea4159'
 CIPHER_URL = 'https://api.nuget.org/v3-flatcontainer/sqlitepclraw.lib.e_sqlcipher/2.1.11/sqlitepclraw.lib.e_sqlcipher.2.1.11.nupkg'
@@ -43,10 +47,13 @@ def archive(url, expected, cache, provided=None):
     return path
 
 
-def write_config(payload):
+def write_config(payload, client=None):
     # Installed paths are resolved by the shell against its own directory.
     config = {'python': r'runtime\python.exe', 'sqlcipher': r'runtime\e_sqlcipher.dll',
               'repository': 'app', 'executable': ''}
+    if client:
+        config.update(client)
+        config['build_label']='未发布开发版 · 包内固定微信'
     (payload / 'backend-config.json').write_text(json.dumps(config, indent=2), encoding='utf-8')
 
 
@@ -75,7 +82,7 @@ def copy_timezone_data(wheel, payload):
 
 def copy_source(payload):
     names = subprocess.check_output(['git', 'ls-files', '-z', '--', 'chat_rescue', 'docs',
-                                    'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'CHANGELOG.md',
+                                    'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'CHANGELOG.md', 'AGENTS.md',
                                     'desktop/windows/licenses'], cwd=ROOT).decode('utf-8').split('\0')
     for name in filter(None, names):
         relative = Path(name)
@@ -88,7 +95,7 @@ def copy_source(payload):
             target = payload / 'licenses' / source.name
         elif name.startswith('docs/') and source.suffix in ('.md', '.svg'):
             target = payload / relative
-        elif name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'CHANGELOG.md'):
+        elif name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'CHANGELOG.md', 'AGENTS.md'):
             target = payload / relative
         else:
             continue
@@ -142,7 +149,11 @@ def main():
     parser.add_argument('--cipher-archive', type=Path)
     parser.add_argument('--tzdata-archive', type=Path)
     parser.add_argument('--allow-dirty', action='store_true', help='local packaging experiments only')
+    parser.add_argument('--wechat-directory', type=Path, help='reviewed complete official client payload; never launched')
+    parser.add_argument('--wechat-manifest', type=Path, help='reviewed exact version, source and per-file hashes')
     args = parser.parse_args()
+    if bool(args.wechat_directory) != bool(args.wechat_manifest):
+        parser.error('--wechat-directory and --wechat-manifest must be provided together')
     if os.name != 'nt':
         parser.error('Windows x64 build host required')
     status = subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True)
@@ -165,19 +176,24 @@ def main():
     copy_source(payload)
     copy_timezone_data(tzdata_wheel,payload)
     shutil.copyfile(runtime / 'LICENSE.txt', payload / 'licenses/Python-LICENSE.txt')
-    write_config(payload)
+    client = None
+    if args.wechat_directory:
+        from chat_rescue.windows_client import install
+        client = install(args.wechat_directory, args.wechat_manifest, payload)
+    write_config(payload, client)
     write_diagnostic_launchers(payload)
     (payload / 'FIRST-RUN.txt').write_text(
         'Chat Rescue ' + version + ' · Windows 实验版\n\n'
         '已内置 Python 和 SQLCipher，无需安装 Python、修改 PATH 或下载项目源码。\n'
-        '需要 Windows 10（19041及以上）/ Windows 11 x64、系统 .NET Framework 4.8及以上。\n'
-        '请自行安装腾讯原版微信并由本人登录；版本准入接受微信4.2.x.x，仍须通过结构、身份与方向检查。\n'
-        '先登录 A（希望补回记录），读取核验并正常退出微信，再登录 B（仍保留记录），从手机 B 导入与 A 的聊天，电脑 B 已完整存在则直接核对，再勾选确认并读取 B。\n'
+        '需要 Windows 10（19041及以上）/ Windows 11 x64、系统 .NET Framework 4.8及以上。\n' +
+        ('已附固定版本的完整腾讯原版微信；本人登录，仍须核对实际数据目录，不代表数据隔离。\n' if client else
+         '请使用本机腾讯官方微信，无需卸载重装；版本准入接受微信4.2.x.x，仍须通过结构、身份与方向检查。\n') +
+        '三步：准备并读取账号 → 检查恢复预览 → 应用与结果。来源/目标由本人选择，可任意顺序读取；每次只登录一个微信。来源聊天须先在电脑完整可见。\n'
         '本版只用B重建A中与B的会话，B只读；核对结构及分片证据，确认移除/导入数量、每片日期与原件后才能应用。\n'
         '密钥、任务和原件保存在本人 LocalAppData/ChatRescue/Desktop 私有目录。\n'
         '卸载仅移除安装的程序文件，保留上述资料及微信记录。\n'
         '真实双账号GUI恢复、微信显示、手机迁移和空白库初始化仍待验收。\n'
-        '使用说明见 docs/windows-desktop.md，第三方许可见 licenses/。\n', encoding='utf-8-sig')
+        '使用说明见 docs/windows-beginner-guide.md，手动找目录请点账号卡“去哪里找？”。未知附件状态跳过本体并计数，旧媒体预览须重新生成。第三方许可见 licenses/。\n', encoding='utf-8-sig')
     compile_shell(payload)
     report = smoke_check(payload)
     manifest = {'version': version, 'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),

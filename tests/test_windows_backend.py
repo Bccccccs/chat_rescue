@@ -14,7 +14,7 @@ from chat_rescue.workflow import private_json, digest
 class DesktopBridgeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.plan = self.root / 'plan'; self.plan.mkdir()
         private_json(self.plan / 'sync-plan.json', {'version': 1,
                      'accounts': {'A': {'owner': 'synthetic_a'}, 'B': {'owner': 'synthetic_b'}},
@@ -102,6 +102,34 @@ class DesktopBridgeTests(unittest.TestCase):
                 backend.dispatch({'action': 'capture', 'account': {}, 'identity_confirmed': True, 'executable': 'synthetic.exe'})
             capture.assert_not_called()
 
+    def test_read_uses_unique_client_pid_without_binding_account_to_file_holders(self):
+        selected={'root':'synthetic-root','owner':'synthetic-owner','keys':''}
+        with patch.object(backend,'account',return_value=selected), \
+             patch.object(backend,'main_processes',return_value=[123]), \
+             patch.object(backend,'resource_processes',side_effect=AssertionError('no account/process binding')), \
+             patch.object(backend,'job',return_value=self.root), \
+             patch.object(backend,'capture',return_value={'keys':'synthetic-keys','state':'verified'}) as capture, \
+             patch.object(backend,'account_nickname',return_value='Synthetic'):
+            result=backend.dispatch({'action':'capture','account':{},'identity_confirmed':True,'executable':'synthetic.exe'})
+        self.assertEqual(result['account']['nickname'],'Synthetic')
+        self.assertEqual(capture.call_args.args[:4],(123,'synthetic.exe','synthetic-root','synthetic-owner'))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows Restart Manager')
+    def test_process_binding_finds_synthetic_wal_and_shm_holders(self):
+        root = self.root / 'synthetic-db-storage'
+        for rel in ('message/message_0.db', 'message/message_resource.db',
+                    'session/session.db', 'contact/contact.db'):
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'synthetic fixture')
+        for suffix in ('-wal', '-shm'):
+            with self.subTest(suffix=suffix):
+                sidecar = root / ('message/message_0.db' + suffix)
+                with sidecar.open('w+b') as stream:
+                    stream.write(b'synthetic fixture')
+                    stream.flush()
+                    self.assertIn(os.getpid(), backend.resource_processes(root))
+
     def test_empty_target_error_is_actionable_json_not_traceback(self):
         output = io.StringIO()
         with patch.object(backend.sys, 'stdin', io.StringIO('{}')), patch.object(backend.sys, 'stdout', output), \
@@ -137,14 +165,13 @@ class DesktopBridgeTests(unittest.TestCase):
                 backend.dispatch({'action': 'launch', 'slot': 'B', 'executable': 'synthetic.exe'})
             launch.assert_not_called()
 
-    def test_b_launch_requires_independent_a_verification(self):
+    def test_source_can_be_launched_without_reading_target_first(self):
         with patch.object(backend, 'app_info', return_value={'executable': 'synthetic.exe'}), \
              patch.object(backend, 'ensure_closed'), patch.object(backend, 'account', return_value={'keys': 'synthetic.json', 'root': 'synthetic'}), \
-             patch.object(backend, 'require_private'), patch.object(backend.cli, 'verify_keys', side_effect=ValueError('invalid A')), \
+             patch.object(backend, 'require_private'), patch.object(backend.cli, 'verify_keys') as verify, \
              patch.object(backend.subprocess, 'Popen') as launch:
-            with self.assertRaisesRegex(ValueError, 'invalid A'):
-                backend.dispatch({'action': 'launch', 'slot': 'B', 'executable': 'synthetic.exe', 'a': {}})
-            launch.assert_not_called()
+            backend.dispatch({'action': 'launch', 'slot': 'B', 'executable': 'synthetic.exe', 'a': {}})
+            launch.assert_called_once();verify.assert_not_called()
 
     def test_closed_wechat_reuses_verified_existing_keys_without_capture(self):
         selected = {'root': 'synthetic', 'owner': 'synthetic_owner', 'keys': 'synthetic.json'}
@@ -155,6 +182,18 @@ class DesktopBridgeTests(unittest.TestCase):
             result = backend.dispatch({'action': 'capture', 'account': {}, 'identity_confirmed': True, 'executable': 'synthetic.exe'})
             self.assertEqual(result['account']['nickname'], '合成昵称')
             verify.assert_called_once_with('synthetic', 'synthetic.json'); capture.assert_not_called()
+
+    def test_zero_processes_without_keys_does_not_claim_multiple_instances(self):
+        with patch.object(backend,'account',return_value={'root':'synthetic','owner':'synthetic','keys':''}), \
+                patch.object(backend,'main_processes',return_value=[]):
+            with self.assertRaisesRegex(ValueError,'0 个.*未找到'):
+                backend.dispatch({'action':'capture','account':{},'identity_confirmed':True,'executable':'synthetic.exe'})
+
+    def test_multiple_matching_processes_report_count_and_pids(self):
+        with patch.object(backend,'account',return_value={'root':'synthetic','owner':'synthetic','keys':''}), \
+                patch.object(backend,'main_processes',return_value=[42,84]):
+            with self.assertRaisesRegex(ValueError,'2 个.*42.*84'):
+                backend.dispatch({'action':'capture','account':{},'identity_confirmed':True,'executable':'synthetic.exe'})
 
     def test_settings_save_paths_without_secrets_or_confirmation(self):
         values = [{'owner': 'synthetic', 'root': 'synthetic-root', 'keys': 'synthetic-path.json',
@@ -191,4 +230,4 @@ class DesktopBridgeTests(unittest.TestCase):
              patch.object(backend.cli, 'roots', return_value={'database_roots': [str(self.root / 'db_storage')]}):
             self.assertNotIn('旧实验昵称', backend.discover()[0]['label'])
             backend.save_settings({'accounts': [{'root': str(self.root / 'db_storage'), 'nickname': '本次昵称'}, {}]})
-            self.assertEqual(backend.discover()[0]['label'], '本次昵称 · 上次读取')
+            self.assertEqual(backend.discover()[0]['label'], '本次昵称 · 上次识别 · 路径已失效')

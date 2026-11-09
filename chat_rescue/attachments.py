@@ -77,7 +77,10 @@ def check_state(root, expected):
 
 def read_file(root, relative):
     p = path_at(root, relative)
-    if not p.is_file() or not 0 < p.stat().st_size <= MAX_FILE:
+    if not p.is_file() or p.stat().st_size==0:
+        from .media_containers import MediaEvidenceError
+        raise MediaEvidenceError('source-file-missing','媒体文件不存在或尚无本地内容')
+    if p.stat().st_size > MAX_FILE:
         raise ValueError('附件缺失、为空或超过单文件256MiB限制')
     from .workflow import digest
     before = digest(p)
@@ -127,6 +130,12 @@ def aes(data, key, encrypt):
 
 
 def image_format(raw):
+    if raw.startswith((b'II*\0',b'MM\0*')):
+        from .media_containers import tiff_check
+        tiff_check(raw);return 'tiff'
+    if raw.startswith(b'\0\0\0\x0cJXL '):
+        from .media_containers import jxl_check
+        jxl_check(raw);return 'jxl'
     if raw.startswith(b'\x89PNG\r\n\x1a\n'):
         pos=8;seen=[]
         while pos+12<=len(raw):
@@ -145,10 +154,35 @@ def image_format(raw):
         return 'gif'
     elif raw.startswith(b'RIFF') and raw[8:12]==b'WEBP' and len(raw)>=20 and struct.unpack('<I',raw[4:8])[0]+8==len(raw):
         return 'webp'
+    elif raw.startswith(b'BM') and len(raw)>=54:
+        # Explicit Windows BITMAPINFOHEADER / BI_RGB, 24 or 32 bits only.
+        size,r1,r2,offset=struct.unpack_from('<IHHI',raw,2)
+        header,width,height,planes,bits,compression,pixels=struct.unpack_from('<IiiHHII',raw,14)
+        if size!=len(raw) or r1 or r2 or offset<14+header or offset>len(raw) or width<=0 or not height or planes!=1:
+            raise ValueError('BMP 头、长度或像素偏移损坏')
+        if header!=40 or bits not in (24,32) or compression!=0:
+            from .media_containers import UnsupportedMediaFormat
+            raise UnsupportedMediaFormat('BMP 编码布局尚未适配')
+        stride=((width*bits+31)//32)*4
+        if (size==len(raw) and r1==r2==0 and header==40 and width>0 and height!=0
+                and planes==1 and bits in (24,32) and compression==0 and offset==54
+                and pixels in (0,stride*abs(height)) and offset+stride*abs(height)==len(raw)):
+            return 'bmp'
     elif raw.startswith(b'wxgf') and len(raw)>16:
         return 'wxgf'
-    elif len(raw)>16 and raw[4:8]==b'ftyp' and raw[8:12] in (b'heic',b'heix',b'hevc',b'hevx',b'mif1',b'avif'):
-        return 'heif'
+    elif len(raw)>=24 and raw[4:8]==b'ftyp':
+        size=struct.unpack_from('>I',raw)[0]
+        brands={raw[8:12],*(raw[p:p+4] for p in range(16,min(size,len(raw)),4))}
+        if 16<=size<=len(raw) and size%4==0:
+            pos=size
+            while pos+8<=len(raw):
+                length=struct.unpack_from('>I',raw,pos)[0]
+                if length<8 or length>len(raw)-pos:break
+                pos+=length
+            if pos==len(raw) and pos>size:
+                if brands & {b'heic',b'heix',b'hevc',b'hevx',b'mif1',b'msf1',b'avif',b'avis'}:return 'heif'
+                from .media_containers import UnsupportedMediaFormat
+                raise UnsupportedMediaFormat('图片容器品牌尚未适配')
     raise ValueError('图片容器不完整或格式尚未适配')
 
 
@@ -181,7 +215,7 @@ def encode_dat(raw, header, key, xor):
 
 class Images:
     def __init__(self, root, owner):
-        self.root=Path(root);self.owner=owner;self.dependencies={};self._verified=None;self._v1=None
+        self.root=Path(root);self.owner=owner;self.dependencies={};self._verified=None;self._v1=None;self._xor=None
 
     def candidates(self):
         app_data=self.root.parent.parent/'app_data'
@@ -198,35 +232,68 @@ class Images:
 
     def decode(self, raw):
         if raw[:6] in (DAT1,DAT2):
+            from .media_containers import UnsupportedMediaFormat, MediaEvidenceError
             a,x,n=dat_parts(raw)
+            if a==0 and x==0:
+                body=raw[15:];image_format(body)
+                return body,{'format':'dat-v1' if raw[:6]==DAT1 else 'dat-v2','header':raw[:15].hex()}
             candidates=list(self.candidates()) if raw[:6]==DAT2 else [(b'cfcd208495d565ef',v) for v in range(256) if x] or [(b'cfcd208495d565ef',0)]
-            matches={}
+            if not candidates:
+                raise MediaEvidenceError('image-key-metadata-missing','本账号缺少图片 DAT V2 密钥元数据；不能用数据库密钥代替图片密钥')
+            matches={};unsupported=set()
             for key,xor in candidates:
                 try:
                     body=decode_dat(raw,key,xor);kind=image_format(body)
-                    if raw[:6]==DAT1 and x and kind in ('wxgf','heif'):
+                    if raw[:6]==DAT1 and x and kind in ('wxgf','heif','bmp','tiff','jxl'):
                         continue  # No complete checksum can disambiguate the V1 tail.
                     matches[body]=(key,xor)
+                except UnsupportedMediaFormat:
+                    unsupported.add(body)
                 except ValueError:continue
-            if len(matches)!=1:raise ValueError('图片DAT缺少唯一可验证密钥或格式未适配')
+            if not matches and len(unsupported)==1:
+                raise UnsupportedMediaFormat('图片 DAT 已识别解密后的容器，但编码布局尚未适配')
+            if len(matches)!=1 or unsupported:
+                raise MediaEvidenceError('image-decryption-unverified','图片 DAT 解密结果无法唯一验证；可能为密钥参数不匹配或载荷不可读，未恢复图片本体')
             body=next(iter(matches))
             return body, {'format':'dat-v1' if raw[:6]==DAT1 else 'dat-v2','header':raw[:15].hex()}
+        known_plain = raw.startswith((b'\x89PNG\r\n\x1a\n', b'\xff\xd8\xff', b'GIF87a', b'GIF89a', b'RIFF', b'BM', b'wxgf',b'II*\0',b'MM\0*',b'\0\0\0\x0cJXL ')) or raw[4:8] == b'ftyp'
         try:
             image_format(raw);return raw,{'format':'plain'}
-        except ValueError:pass
+        except ValueError:
+            if known_plain: raise
         variants={}
-        for magic in (0xff,0x89,0x47,0x52):
-            xor=raw[0]^magic if raw else 0
+        signatures = [(0,magic) for magic in (b'\xff\xd8\xff',b'\x89PNG\r\n\x1a\n',b'GIF87a',b'GIF89a',b'RIFF',b'BM',b'wxgf',b'II*\0',b'MM\0*',b'\0\0\0\x0cJXL ')] + [(4,b'ftyp')]
+        for offset,magic in signatures:
+            if len(raw)<offset+len(magic):continue
+            xor=raw[offset]^magic[0]
+            if bytes(b^xor for b in raw[offset:offset+len(magic)])!=magic:continue
             body=bytes(b^xor for b in raw)
             try:image_format(body);variants[body]=xor
             except ValueError:continue
-        if len(variants)!=1:raise ValueError('旧XOR图片格式未适配')
+        if len(variants)!=1:
+            from .media_containers import UnsupportedMediaFormat
+            raise UnsupportedMediaFormat('旧XOR图片格式未适配')
         body=next(iter(variants));return body,{'format':'xor','xor':variants[body]}
+
+    def verified_xor(self):
+        if self._xor is not None:return self._xor
+        for p in sorted((self.root/'msg/attach').glob('*/*/Img/*.dat'))[:32]:
+            if not 0<p.stat().st_size<=MAX_FILE:continue
+            relative=p.relative_to(self.root).as_posix()
+            raw,h=read_file(self.root,relative)
+            if raw[:6] in (DAT1,DAT2):continue
+            try:_,encoding=self.decode(raw)
+            except ValueError:continue
+            if encoding['format']=='xor':
+                self.dependencies[relative]=h;self._xor=encoding['xor'];return self._xor
+        from .media_containers import MediaEvidenceError
+        raise MediaEvidenceError('image-target-evidence-missing','目标账号没有可核验的旧XOR图片样本，不能复制源账号加密参数')
 
     def verified_key(self):
         if self._verified:return self._verified
         keys=list(self.candidates())
-        if not keys:raise ValueError('目标账号缺少图片DAT V2密钥元数据')
+        from .media_containers import MediaEvidenceError
+        if not keys:raise MediaEvidenceError('image-target-evidence-missing','目标账号缺少图片DAT V2密钥元数据')
         count=0
         for p in sorted((self.root/'msg/attach').glob('*/*/Img/*.dat')):
             if count>=32:break
@@ -239,7 +306,7 @@ class Images:
                 try:image_format(decode_dat(raw,key,xor))
                 except ValueError:continue
                 self.dependencies[relative]=h;self._verified=(key,xor);return self._verified
-        raise ValueError('目标账号没有可核验的DAT V2图片样本，不能猜测重加密密钥')
+        raise MediaEvidenceError('image-target-evidence-missing','目标账号没有可核验的DAT V2图片样本，不能猜测重加密密钥')
 
     def verified_v1(self):
         if self._v1:return self._v1
@@ -254,13 +321,14 @@ class Images:
             for xor in range(256):
                 try:
                     body=decode_dat(raw,b'cfcd208495d565ef',xor);kind=image_format(body)
-                    if kind not in ('wxgf','heif'):matches[body]=xor
+                    if kind not in ('wxgf','heif','bmp','tiff','jxl'):matches[body]=xor
                 except ValueError:continue
             if len(matches)==1:
                 self.dependencies[relative]=h
                 self._v1=(b'cfcd208495d565ef',next(iter(matches.values())))
                 return self._v1
-        raise ValueError('目标账号没有可核验的DAT V1尾部样本，不能猜测XOR密钥')
+        from .media_containers import MediaEvidenceError
+        raise MediaEvidenceError('image-target-evidence-missing','目标账号没有可核验的DAT V1尾部样本，不能猜测XOR密钥')
 
     def encode(self, body, encoding):
         image_format(body)
@@ -269,12 +337,14 @@ class Images:
         if kind=='xor':
             xor=encoding.get('xor')
             if type(xor) is not int or not 0<=xor<=255:raise ValueError('XOR描述无效')
+            xor=self.verified_xor()
             return bytes(b^xor for b in body)
         if kind not in ('dat-v1','dat-v2'):raise ValueError('图片加密描述未适配')
         try:header=bytes.fromhex(encoding['header'])
         except (ValueError,TypeError):raise ValueError('DAT头无效') from None
         if len(header)!=15 or header[:6]!=(DAT1 if kind=='dat-v1' else DAT2):raise ValueError('DAT头版本冲突')
-        if kind=='dat-v2':key,xor=self.verified_key()
+        if kind=='dat-v2':
+            key,xor=self.verified_key() if any(struct.unpack('<II',header[6:14])) else (None,0)
         else:
             key,xor=self.verified_v1() if struct.unpack('<II',header[6:14])[1] else (b'cfcd208495d565ef',0)
         raw=encode_dat(body,header,key,xor)
@@ -290,7 +360,9 @@ def destination(kind, peer, mon, name):
     filename(name)
     if kind==3:
         base='msg/attach/'+hashlib.md5(peer.encode()).hexdigest()+'/'+mon+'/Img/'
-        if not re.fullmatch(r'[0-9a-fA-F]{32}(?:_[a-zA-Z0-9]+)?\.(?:dat|png|jpe?g|gif|webp|heic|heif)',name):
+        # A safe, resource-bound cache name is independent of its container.
+        # Unknown contents are classified/skipped after bytes are inspected.
+        if not re.fullmatch(r'[0-9a-fA-F]{32}(?:_[a-zA-Z0-9]+)?\.[a-zA-Z0-9]{1,10}',name):
             raise ValueError('图片缓存文件名未适配')
     else:base=('msg/video/' if kind==43 else 'msg/file/')+mon+'/'
     return validate_path(base+name)
@@ -344,7 +416,10 @@ def locate(root, peer, message, resources):
         raw,h=read_file(root,relative)
         if len(raw)!=size or hashlib.md5(raw).hexdigest()!=md5:raise ValueError('文件附件内容MD5或大小不符')
         return [(relative,raw,h,None)]
-    if len(resources)!=1:raise ValueError('图片/视频缺少唯一会话资源关联')
+    if not resources:
+        from .media_containers import MediaEvidenceError
+        raise MediaEvidenceError('source-resource-missing','图片/视频缺少本地会话资源关联')
+    if len(resources)!=1:raise ValueError('图片/视频会话资源关联冲突')
     resource=resources[0];hashes=re.findall(rb'(?<![0-9a-fA-F])[0-9a-fA-F]{32}(?![0-9a-fA-F])',resource['info']['packed_info'] or b'')
     if len(set(hashes))!=1:raise ValueError('图片/视频资源名尚未适配')
     token=hashes[0].decode();folder=Path(root)/str(PurePosixPath(destination(kind,peer,mon,token+('.dat' if kind==3 else '.mp4'))).parent)
@@ -366,11 +441,34 @@ def locate(root, peer, message, resources):
 
 def primary(kind, files):
     if kind==3:return any(not PurePosixPath(f[0]).stem.endswith('_t') for f in files)
-    if kind==43:return any(PurePosixPath(f[0]).suffix.lower()=='.mp4' for f in files)
+    if kind==43:
+        import platform
+        from .media_containers import VIDEO_SUFFIXES
+        suffixes = VIDEO_SUFFIXES if platform.system() == 'Windows' else ('.mp4',)
+        return any(PurePosixPath(f[0]).suffix.lower() in suffixes for f in files)
     return bool(files)
 
 
-def collect(plain, asset_root, owner, peer, messages, output, allow_missing=False):
+def check_video(raw, name):
+    import platform
+    from .media_containers import VIDEO_SUFFIXES, video_format, UnsupportedMediaFormat
+    suffix = PurePosixPath(name).suffix.lower()
+    if platform.system() == 'Windows':
+        if suffix in VIDEO_SUFFIXES:
+            detected = video_format(raw)
+            expected = {'.mp4':'mp4', '.m4v':'mp4', '.mov':'mov', '.avi':'avi',
+                        '.mkv':'mkv', '.webm':'webm', '.3gp':'3gp', '.3g2':'3g2'}[suffix]
+            if detected != expected:
+                raise UnsupportedMediaFormat('视频扩展名与容器不符')
+        elif suffix in ('.jpg','.jpeg','.png','.webp'):
+            image_format(raw)
+        else:
+            raise UnsupportedMediaFormat('视频资源附属文件格式未适配')
+    elif suffix == '.mp4' and (len(raw)<16 or raw[4:8]!=b'ftyp'):
+        raise ValueError('视频容器未适配')
+
+
+def collect(plain, asset_root, owner, peer, messages, output, allow_missing=False, *, skip_unsupported=False,skip_unavailable=False,skip_unsupported_state=False):
     from .workflow import digest
     if Path(output).resolve().is_relative_to(Path(asset_root).resolve()):
         raise ValueError('附件bundle必须位于微信账号目录之外')
@@ -378,17 +476,47 @@ def collect(plain, asset_root, owner, peer, messages, output, allow_missing=Fals
     for message in messages:
         row=message['fields'];kind=row['local_type']
         if kind not in TYPES:continue
-        if row['status']!=3 or row['upload_status']!=0:raise ValueError('附件消息状态尚未适配')
-        resources=resources_for(plain,peer,message)
-        files=locate(Path(asset_root),peer,message,resources)
+        entry={'server_id':row['server_id'],'kind':kind,'month':month(row),'files':[]}
+        if row['status']!=3 or row['upload_status']!=0:
+            if not skip_unsupported_state:raise ValueError('附件消息状态尚未适配')
+            entry['skip_reason']='source-state-unsupported';entries.append(entry);continue
+        from .media_containers import UnsupportedMediaFormat, MediaEvidenceError
+        try:
+            resources=resources_for(plain,peer,message)
+            files=locate(Path(asset_root),peer,message,resources)
+        except MediaEvidenceError as error:
+            if not skip_unavailable:raise
+            entry['skip_reason']=error.reason;entries.append(entry);continue
+        if (skip_unsupported and kind==43 and files and not primary(kind,files)
+                and any(PurePosixPath(f[0]).suffix.lower() not in ('.jpg','.jpeg','.png','.webp') for f in files)):
+            entry['skip_reason']='unsupported-format'
+            originals.update({relative:h for relative,raw,h,t in files})
+            entries.append(entry);continue
         if not primary(kind,files):
+            if skip_unavailable:
+                entry['skip_reason']='source-media-missing'
+                originals.update({relative:h for relative,raw,h,t in files})
+                entries.append(entry);continue
             if not allow_missing:raise ValueError('图片原内容、视频或文件附件未完整下载；不能只恢复缩略图')
             files=[]
-        entry={'server_id':row['server_id'],'kind':kind,'month':month(row),'files':[]}
-        for relative,raw,h,resource_type in files:
-            body,encoding=context.decode(raw) if kind==3 else (raw,{'format':'plain'})
-            if kind==43 and relative.endswith('.mp4') and (len(raw)<16 or raw[4:8]!=b'ftyp'):
-                raise ValueError('视频容器未适配')
+        decoded=[]
+        from .media_containers import UnsupportedMediaFormat
+        try:
+            for relative,raw,h,resource_type in files:
+                body,encoding=context.decode(raw) if kind==3 else (raw,{'format':'plain'})
+                if kind==43:check_video(raw, relative)
+                decoded.append((relative,raw,h,resource_type,body,encoding))
+        except UnsupportedMediaFormat:
+            if not skip_unsupported or kind not in (3,43):raise
+            entry['skip_reason']='unsupported-format'
+            originals.update({relative:h for relative,raw,h,t in files})
+            entries.append(entry);continue
+        except MediaEvidenceError as error:
+            if not skip_unavailable:raise
+            entry['skip_reason']=error.reason
+            originals.update({relative:h for relative,raw,h,t in files})
+            entries.append(entry);continue
+        for relative,raw,h,resource_type,body,encoding in decoded:
             total+=len(body)
             if total>MAX_TOTAL:raise ValueError('附件bundle超过2GiB限制')
             name='attachments/'+str(sum(len(e['files']) for e in entries)+len(entry['files'])+1).zfill(6)+'.bin'
@@ -407,11 +535,27 @@ def read_entries(bundle,data):
     rows={m['fields']['server_id']:m['fields'] for m in data['messages'] if m['fields']['local_type'] in TYPES}
     found={};used=set();total=0
     for entry in data.get('attachments',[]):
+        if not isinstance(entry.get('files'),list):raise ValueError('附件文件清单必须为列表')
         sid=entry['server_id']
         if sid in found or sid not in rows or entry['kind']!=rows[sid]['local_type'] or entry['month']!=month(rows[sid]):
             raise ValueError('附件清单与消息不一一对应')
-        if rows[sid]['status']!=3 or rows[sid]['upload_status']!=0:raise ValueError('附件消息状态尚未适配')
+        from .media import WINDOWS_SKIP_STATES
+        unknown_state=rows[sid]['status']!=3 or rows[sid]['upload_status']!=0
+        state_skip=(data.get('version')==5 and WINDOWS_SKIP_STATES in data.get('capabilities',[])
+                    and entry.get('skip_reason')=='source-state-unsupported' and entry['files']==[])
+        if unknown_state!=state_skip:raise ValueError('附件消息状态或跳过状态证据不匹配')
         files=[];names=set()
+        if 'skip_reason' in entry:
+            from .media import WINDOWS_SKIP_FORMATS,WINDOWS_SKIP_UNAVAILABLE
+            reason=entry['skip_reason']
+            unavailable={'source-file-missing','source-resource-missing','source-media-missing',
+                         'image-key-metadata-missing','image-decryption-unverified'}
+            valid = state_skip or (reason=='unsupported-format' and entry['kind'] in (3,43)
+                     and WINDOWS_SKIP_FORMATS in data.get('capabilities',[])) or (
+                     reason in unavailable and WINDOWS_SKIP_UNAVAILABLE in data.get('capabilities',[]) and (
+                         not reason.startswith('image-') or entry['kind']==3))
+            if (not valid or entry['files'] or data.get('version')!=5):
+                raise ValueError('附件跳过原因或能力无效')
         for item in entry['files']:
             name=filename(item['name']);destination(entry['kind'],data['peer'],entry['month'],name)
             payload=item['payload'];size=item['size']
@@ -428,8 +572,7 @@ def read_entries(bundle,data):
                 raise ValueError('附件文件哈希校验失败')
             if entry['kind']==3:image_format(body)
             elif item['encoding']!={'format':'plain'}:raise ValueError('视频/文件不允许图片加密描述')
-            if entry['kind']==43 and name.endswith('.mp4') and (len(body)<16 or body[4:8]!=b'ftyp'):
-                raise ValueError('视频容器未适配')
+            if entry['kind']==43:check_video(body, name)
             if entry['kind'] not in (3,43):
                 title,length,md5=xml_file(rows[sid])
                 if name!=title or size!=length or hashlib.md5(body).hexdigest()!=md5:
@@ -454,11 +597,31 @@ def prepare(bundle,data,target_plain,target_assets,target_owner,output):
     if Path(output).resolve().is_relative_to(Path(target_assets).resolve()):
         raise ValueError('附件候选必须位于微信账号目录之外')
     entries=read_entries(bundle,data);context=Images(target_assets,target_owner)
-    watched={};candidates={};counts={'image_added':0,'image_repaired':0,'video_added':0,'video_repaired':0,'file_added':0,'file_repaired':0,'attachments_skipped':0}
+    watched={};candidates={};counts={'image_added':0,'image_repaired':0,'video_added':0,'video_repaired':0,'file_added':0,'file_repaired':0,'attachments_skipped':0,'image_unsupported':0,'video_unsupported':0,
+        'image_source_unavailable':0,'video_source_unavailable':0,'file_source_unavailable':0,
+        'image_key_unavailable':0,'image_target_unavailable':0,'attachment_state_skipped':0,
+        **{kind+'_'+side+'_state_unsupported':0 for kind in ('image','video','file') for side in ('source','target')}}
+    state_counts={}
+    def count_state(kind,side,row):
+        name='image' if kind==3 else 'video' if kind==43 else 'file'
+        counts[name+'_'+side+'_state_unsupported']+=1;counts['attachment_state_skipped']+=1;counts['attachments_skipped']+=1
+        status=row['status'] if type(row['status']) is int else 'non-integer'
+        upload=row['upload_status'] if type(row['upload_status']) is int else 'non-integer'
+        key=(side,kind,status,upload);state_counts[key]=state_counts.get(key,0)+1
     for message in data['messages']:
         row=message['fields'];sid=row['server_id'];kind=row['local_type']
         if sid not in entries:continue
         entry,files=entries[sid];peer=data['owner']
+        if entry.get('skip_reason')=='source-state-unsupported':
+            count_state(kind,'source',row);continue
+        if entry.get('skip_reason')=='unsupported-format':
+            counts['image_unsupported' if kind==3 else 'video_unsupported']+=1
+            counts['attachments_skipped']+=1
+            continue
+        if entry.get('skip_reason'):
+            key='image_key_unavailable' if entry['skip_reason'].startswith('image-') else (
+                ('image' if kind==3 else 'video' if kind==43 else 'file')+'_source_unavailable')
+            counts[key]+=1;counts['attachments_skipped']+=1;continue
         existing=None
         for rel in message_rels(target_plain):
             with connect(Path(target_plain)/rel) as c:
@@ -467,7 +630,10 @@ def prepare(bundle,data,target_plain,target_assets,target_owner,output):
                     found=c.execute('SELECT * FROM "'+table+'" WHERE server_id=?',(sid,)).fetchall()
                     if len(found)>1 or (found and existing):raise ValueError('附件消息跨分片匹配多义')
                     if found:existing=found[0]
-        if existing and (existing['status']!=3 or existing['upload_status']!=0):raise ValueError('目标附件消息状态尚未适配')
+        if existing and (existing['status']!=3 or existing['upload_status']!=0):
+            from .media import WINDOWS_SKIP_STATES
+            if data.get('version')!=5 or WINDOWS_SKIP_STATES not in data.get('capabilities',[]):raise ValueError('目标附件消息状态尚未适配')
+            count_state(kind,'target',existing);continue
         if not files:
             if not existing:raise ValueError('源附件缺失且目标没有完整对应消息')
             target_message={'sender':message['sender'],'fields':dict(existing)}
@@ -478,21 +644,30 @@ def prepare(bundle,data,target_plain,target_assets,target_owner,output):
                 if kind==3:context.decode(raw)
                 watched[rel]=h
             counts['attachments_skipped']+=1;continue
-        changed=False
-        for item,body in files:
-            rel=destination(kind,peer,entry['month'],item['name']);path=path_at(target_assets,rel)
-            before=file_hash(target_assets,rel);watched[rel]=before
-            if path.exists() and path.stat().st_size:
-                raw,h=read_file(target_assets,rel)
-                prior=context.decode(raw)[0] if kind==3 else raw
-                if prior!=body:raise ValueError('attachment content collision：目标已有不同非空文件')
-                continue
-            raw=context.encode(body,item['encoding']) if kind==3 else body
-            if len(raw)!=item['stored_size']:raise ValueError('附件重加密尺寸与资源关联不一致')
-            if kind not in (3,43):
-                name,size,md5=xml_file(row)
-                if name!=item['name'] or size!=len(raw) or hashlib.md5(raw).hexdigest()!=md5:
-                    raise ValueError('文件附件清单与原消息MD5不符')
+        changed=False;pending={}
+        from .media_containers import MediaEvidenceError, UnsupportedMediaFormat
+        try:
+            for item,body in files:
+                rel=destination(kind,peer,entry['month'],item['name']);path=path_at(target_assets,rel)
+                before=file_hash(target_assets,rel);watched[rel]=before
+                if path.exists() and path.stat().st_size:
+                    raw,h=read_file(target_assets,rel)
+                    prior=context.decode(raw)[0] if kind==3 else raw
+                    if prior!=body:raise ValueError('attachment content collision：目标已有不同非空文件')
+                    continue
+                raw=context.encode(body,item['encoding']) if kind==3 else body
+                if len(raw)!=item['stored_size']:raise ValueError('附件重加密尺寸与资源关联不一致')
+                if kind not in (3,43):
+                    name,size,md5=xml_file(row)
+                    if name!=item['name'] or size!=len(raw) or hashlib.md5(raw).hexdigest()!=md5:
+                        raise ValueError('文件附件清单与原消息MD5不符')
+                if rel in pending and pending[rel]!=raw:raise ValueError('附件同一消息路径冲突')
+                pending[rel]=raw
+        except (MediaEvidenceError, UnsupportedMediaFormat):
+            from .media import WINDOWS_SKIP_UNAVAILABLE
+            if kind!=3 or data.get('version')!=5 or WINDOWS_SKIP_UNAVAILABLE not in data.get('capabilities',[]):raise
+            counts['image_target_unavailable']+=1;counts['attachments_skipped']+=1;continue
+        for rel,raw in pending.items():
             p=Path(output)/'attachment-candidates'/rel;p.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
             if rel in candidates:
                 if digest(p)!=hashlib.sha256(raw).hexdigest():raise ValueError('attachment filename collision：同一路径对应不同内容')
@@ -506,6 +681,8 @@ def prepare(bundle,data,target_plain,target_assets,target_owner,output):
         else:counts['attachments_skipped']+=1
     watched.update(context.dependencies)
     if not check_state(target_assets,watched):raise ValueError('准备期间目标附件改变')
+    counts['attachment_state_skip_details']=[{'side':side,'kind':kind,'status':status,'upload_status':upload,'count':count}
+         for (side,kind,status,upload),count in state_counts.items()]
     return {'originals':watched,'candidates':candidates},counts
 
 

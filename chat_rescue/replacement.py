@@ -11,7 +11,7 @@ from .workflow import (connect, write_connect, ident, table_for, digest, private
 from .shards import database_rels, message_rels, mutable_rels
 from .schema_checks import replacement_schema_check
 from .routing import routing_inventory, routed_restore, CAPABILITY as ROUTING_CAPABILITY
-from .voice import MEDIA
+from .voice import single_media
 from .media import format_for, check_voice_layout
 
 MODE = 'replace-a-from-b'
@@ -20,16 +20,17 @@ MODE = 'replace-a-from-b'
 def replacement_base(exported, output, owner, peer, *, include_voice=False):
     """Clear only the selected chat in a new derived copy; retain immutable export."""
     output = ops.fresh(output)
-    for rel in (*database_rels(exported), *((MEDIA,) if include_voice else ())):
+    for rel in (*database_rels(exported), *(single_media(exported) if include_voice else ())):
         dest = output / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(Path(exported) / rel, dest)
     if include_voice:
         from .voice import schema
-        with write_connect(output / MEDIA) as c:
-            schema(c)
-            c.execute('DELETE FROM VoiceInfo WHERE chat_name_id IN '
-                      '(SELECT rowid FROM Name2Id WHERE user_name=?)', (peer,))
+        for rel in single_media(output):
+            with write_connect(output / rel) as c:
+                schema(c)
+                c.execute('DELETE FROM VoiceInfo WHERE chat_name_id IN '
+                          '(SELECT rowid FROM Name2Id WHERE user_name=?)', (peer,))
     removed = 0
     table = table_for(peer)
     for rel in message_rels(output):
@@ -87,12 +88,13 @@ def make_replace_plan(a, b, output, *, include_voice=False, include_attachments=
         layouts=[]
         for slot in ('A','B'):
             check_voice_layout(output/(slot+'-plain'))
-            with connect(output/(slot+'-plain')/MEDIA) as c:
-                schema(c)
-                tables={row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-                if tables!={'VoiceInfo','Name2Id'}:raise ValueError('Windows 语音库存在未适配表，拒绝猜测关联')
-                layouts.append([table_shape(c,name) for name in ('VoiceInfo','Name2Id')])
-        if layouts[0]!=layouts[1]:raise ValueError('A/B Windows 语音库字段或索引不同，未生成候选')
+            for rel in single_media(output/(slot+'-plain')):
+                with connect(output/(slot+'-plain')/rel) as c:
+                    schema(c)
+                    tables={row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+                    if tables!={'VoiceInfo','Name2Id'}:raise ValueError('Windows 语音库存在未适配表，拒绝猜测关联')
+                    layouts.append([table_shape(c,name) for name in ('VoiceInfo','Name2Id')])
+        if any(layout != layouts[0] for layout in layouts[1:]):raise ValueError('A/B Windows 语音库字段或索引不同，未生成候选')
     try:
         structure_before=replacement_schema_check(output/'B-plain',output/'A-plain',a['owner'],b['owner'])
     except ValueError as error:
@@ -108,22 +110,30 @@ def make_replace_plan(a, b, output, *, include_voice=False, include_attachments=
     source = save_chat(output / 'B-plain', b['owner'], a['owner'], output / 'B-chat',
                        exclude_system_messages=True, participant_identity_layout=True,
                        include_voice=include_voice,include_attachments=include_attachments)
+    from .voice import target_routing
+    voice_routing = target_routing(output/'A-plain',b['owner'],allow_unavailable=True) if include_voice else None
     removed, draft = replacement_base(output / 'A-plain', output / 'replacement-base', a['owner'], b['owner'],include_voice=include_voice)
     directory = ops.fresh(output / 'A-plan')
     result = routed_restore(output / 'B-chat', output / 'replacement-base', a['owner'], directory / 'recovered-plain',routing,
         include_voice=include_voice,include_attachments=include_attachments,
-        target_asset_root=Path(a['root']).resolve().parent if include_attachments else None)
+        target_asset_root=Path(a['root']).resolve().parent if include_attachments else None,voice_routing=voice_routing)
     with write_connect(directory / 'recovered-plain/session/session.db') as c:
         c.execute('UPDATE SessionTable SET draft=? WHERE username=?', (draft, b['owner']))
         if source['excluded_system_messages']:
             c.execute("UPDATE SessionTable SET summary='' WHERE username=?", (b['owner'],))
     result.update(mode=MODE, removed=removed, excluded_system_messages=source['excluded_system_messages'])
+    if include_voice:
+        media_targets=single_media(output/'A-plain')
+        result['voice_shard_routing'] = {
+            'method': ('unavailable-no-existing-media' if not media_targets else 'single-existing-media'
+                       if len(media_targets)==1 else 'original-target-voice-associations'),
+            'target_media_shards': list(media_targets)}
     if include_voice or include_attachments:
         result.update(media_experimental=True,client_media_verified=False,phone_verified=False)
     result['structure_before_rebuild']=structure_before
     result['structure_check']=replacement_schema_check(output/'B-plain',directory/'recovered-plain',
         a['owner'],b['owner'],candidate=True)
-    writes=(*mutable_rels(a['root']), *((MEDIA,) if include_voice else ()))
+    writes=(*mutable_rels(a['root']), *(single_media(a['root']) if include_voice else ()))
     for rel in writes:
         with connect(directory / 'recovered-plain' / rel) as c:
             if [tuple(r) for r in c.execute('PRAGMA integrity_check')] != [('ok',)]:

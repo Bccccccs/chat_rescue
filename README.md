@@ -1,17 +1,31 @@
 # chat_rescue：微信聊天记录误删恢复工具（Mac / Windows 离线实验支持）
 
-**Windows 0.5.6 已发布：** 修复正常分片被误报“辅助表结构不一致”的问题，保留按原生证据分配消息分片的规则；原语音及图片/视频/文件本体实验可独立开启，默认关闭。[修复原因、升级步骤与报告位置](docs/releases/v0.5.6.md) · [验证记录](docs/testing.md#056-windows-发布验证2026-11-05) · [媒体范围](docs/windows-media.md)。真实客户端历史显示、媒体打开/播放与手机迁移仍需独立验收。
+**帮助你找回与重要的人的微信聊天记录。** 如果你误删了某段单聊，而对方还保留着这段记录，可以在双方授权后，用对方的记录生成自己视角的恢复候选，核对发送/接收方向、时间与数量，备份后再确认应用。
 
-## 版本与下载（2026-11-05）
+**A = 误删记录、需要恢复的目标账号；B = 仍保留记录、提供来源的账号。** 当前 Windows 桌面版只做 **B → A 单聊替换**：A 中这段会话会按 B 的记录重建，预览会明确显示将移除和导入的数量；A 的其他会话与草稿保留，工具不向 B 应用写入。B 没有的消息或未下载的媒体，工具不能凭空补回。
 
-**Windows 0.5.6：只用 B 重建 A 中与 B 的单聊。** 预览会列出 A 将移除、从 B 导入及暂不导入的条数；确认后才替换。A 其他会话与原件保留，B 不写入。系统类型 10000/10002 暂不导入，其他方向或结构异常仍拒绝。详见 [0.5.6 说明](docs/releases/v0.5.6.md)。
+## 第一次使用：跟着教程点按钮
 
-**Mac 当前下载 0.5.0；Windows 当前下载 0.5.6。两平台分别发布，版本号不要求一致。现有下载均为实验预发布，尚无正式稳定版。**
+**不会命令行也可以从桌面版开始。先选你的系统：**
+
+- **Windows：[零基础操作教程：下载、选择账号、核验昵称、确认预览](docs/windows-beginner-guide.md)** · [下载安装包](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.6.0)
+- **Mac：[零基础手把手教程](docs/beginner-guide.md)** · [下载安装包](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.0)
+- 读取失败、找不到 B 或按钮变灰：[Windows 常见卡点](docs/windows-beginner-guide.md#遇到问题先看这里) · [详细排查](docs/troubleshooting.md)
+
+现有下载均为**实验预发布**。电脑显示、语音播放、图片/视频打开及手机迁移需要分别验收；生成候选或数据库验证通过，不代表这些结果已经通过。
+
+**Windows 0.6.0 实验版：** 三步流程、按历史昵称选账号、账号密钥重新核验与任务换机接续；常见媒体逐类校验，条件不足或未适配附件状态跳过本体并计数。**包内不附微信，不要求重装，使用本机腾讯官方微信。** [本轮工作总结与发布说明](docs/releases/v0.6.0.md) · [傻瓜操作教程](docs/windows-beginner-guide.md) · [媒体范围](docs/windows-media.md)。
+
+首次账号与目录的自动对应仍有限制；历史昵称只是提示，本次仍须全库和本人身份核验。普通模式共享当前 Windows 用户的微信配置，不能保证登录缓存隔离。真实 4.2.0.50 取钥、媒体打开/播放和新电脑端到端仍需实机验收。
+
+## 版本与下载（2026-11-09）
+
+**Mac 当前下载 0.5.0；Windows 当前下载 0.6.0。均为实验预发布，尚无正式稳定版。**
 
 | 平台 | 当前下载版 | 主要功能 | 安装文件 |
 | --- | --- | --- | --- |
-| Mac · Apple Silicon | [0.5.0 媒体实验版](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.0) | 五步向导；可选原语音、图片、视频和文件附件恢复；可检查全部消息分片，恢复写入仍限单个 `message_0.db` | `Chat-Rescue-0.5.0-macOS-arm64.zip` |
-| Windows · x64 | [0.5.6 单会话替换实验版](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.6) | 五步向导；现有多消息分片恢复、明确结构的消息方向转换、B 读取前导入确认；可选媒体本体实验，实际打开待验收 | `Chat-Rescue-0.5.6-Windows-x64-Setup.exe` 或 `Chat-Rescue-0.5.6-Windows-x64-Portable.zip` |
+| Mac · Apple Silicon | [0.5.0 媒体实验版](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.0) | 五步向导；可选媒体实验；恢复写入仍限单消息分片 | `Chat-Rescue-0.5.0-macOS-arm64.zip` |
+| Windows · x64 | [0.6.0 账号与媒体整合实验版](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.6.0) | 三步向导；历史昵称与目录选择；现有多分片；可选媒体与任务接续 | `Chat-Rescue-0.6.0-Windows-x64-Setup.exe` 或 `Chat-Rescue-0.6.0-Windows-x64-Portable.zip` |
 
 Mac 当前适配微信 **4.1.13**；Windows 版本入口允许 **4.2.x.x x64**，仍须逐库验证与结构核对。已有 **4.2.0.12** 取钥/导出证据，以及 **4.2.0.13** 所提供账号对的文本参与者映射证据；放行版本号不等于该版本全部功能已验收。微信版本号与本工具版本号是两套编号。
 
@@ -20,17 +34,11 @@ Mac 当前适配微信 **4.1.13**；Windows 版本入口允许 **4.2.x.x x64**�
 
 **Mac 0.5.0 媒体实验版：** [下载安装包](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.0)。可选恢复原语音、图片、视频和文件附件，补齐已有消息缺失的本地内容，附件参与备份、应用、失败回撤和撤回。图片DAT在有可验证来源时转换目标账号加密，原始图片载荷不变。见[附件实验说明](docs/attachment-recovery.md)与[语音说明](docs/voice-recovery.md)。Mac可检查全部消息分片，实际恢复写入仍限单分片；微信内查看/播放/打开及手机迁移尚未验收。媒体功能需在读取页显式开启。
 
-**Windows 0.5.6 实验版：** [下载安装包 / 便携包](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.6)，内置 Python、SQLCipher 和时区数据，按 **先 A → 核验并退出 → 再 B** 操作。B 读取前先确认电脑上的目标单聊及时间范围完整，再生成 B→A 替换预览。支持已有多分片的身份映射、结构检查、备份和协调应用；可选媒体须满足单独的密钥、文件及证据要求。见 [安装部署](docs/windows-deployment.md)、[五步向导](docs/windows-desktop.md) 和 [实测证据](docs/evidence-and-support.md)。下文 Mac 取钥教程仅适用于 Mac 版。
+**Windows 0.6.0 实验版：** [下载安装包 / 便携包](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.6.0)，内置 Python、SQLCipher 和时区数据。来源和目标由本人选择，可任意顺序登录并读取，每次仅打开一个微信，换账号前正常退出。来源聊天须先在电脑完整可见。双方核验后生成 B→A 单聊替换预览，确认具体移除/导入数量和原件后才能应用。[三步教程](docs/windows-beginner-guide.md) · [安装部署](docs/windows-deployment.md)。下文 Mac 副本取钥流程仅适用于 Mac。
 
-**这个工具的作用，是帮助你恢复与重要的人的微信聊天记录。**
+项目开源，提供 Mac Apple Silicon 和 Windows x64 桌面向导，以及取钥、单聊导出、视角转换、备份、预览和应用的命令行工具。两平台的版本与功能范围不同，请按对应教程操作；下方副本、权限与命令说明中的 Mac 流程不能用于 Windows。
 
-**chat_rescue 是一款开源的 Mac 微信聊天记录恢复工具**：当你误删了与对方的单聊，而对方仍保留这段记录，可以在双方同意的前提下，从对方保留的聊天记录恢复自己视角下受支持的消息。
-
-项目提供取钥工具、单聊导出、发送/接收视角转换、原库备份、恢复预览和应用脚本，以及完整 SOP 与 Agent 操作指南。希望帮助人们找回与家人、伴侣、朋友等重要的人的对话。首版为 **experimental**，面向 macOS Apple Silicon，同时提供命令行与原生桌面界面。
-
-适用场景：A 是误删方，B 是保留方。B 在自己的 Mac 上导出双方会话，A 核对恢复预览后，把受支持的消息写入自己的本地数据库。需要双方授权、B 仍有源记录，并满足下方版本与消息范围。
-
-**English:** Open-source WeChat chat history recovery for macOS. Restore supported one-to-one messages from the other participant's retained copy, with perspective conversion, backups, preview, and agent-assisted steps. Experimental; both participants must consent. Optional voice and attachment recovery is experimental on Mac; client playback and phone migration remain unverified. Automatic phone synchronization is not supported.
+**English:** Experimental, open-source WeChat chat history recovery for macOS and Windows. Rebuild supported one-to-one history from the other participant's retained copy, with perspective conversion, backups and a reviewable preview. Both participants must consent. The Windows desktop app replaces the selected conversation in A using B as its sole source. Media playback and phone migration require separate verification; automatic phone synchronization is not supported.
 
 ## 已发布 Mac 版：0.5.0 · 本机实验版
 
@@ -38,7 +46,7 @@ Mac 当前适配微信 **4.1.13**；Windows 版本入口允许 **4.2.x.x x64**�
 
 [下载与发布说明](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.0) · [更新记录](CHANGELOG.md)
 
-**第一次使用 Mac 版？请看 [Mac 零基础手把手教程](docs/beginner-guide.md)**：从下载安装、四项权限授权，到分别登录、确认旧聊天、核对补齐预览和检查结果，按实际按钮一步一步操作。Windows 使用上方安装包入口和 Windows 五步说明。
+**第一次使用 Mac 版？请看 [Mac 零基础手把手教程](docs/beginner-guide.md)**：从下载安装、四项权限授权，到分别登录、确认旧聊天、核对补齐预览和检查结果，按实际按钮一步一步操作。Windows 使用上方安装包入口和 Windows 三步教程。
 
 当前源码已改为顺序登录：**打开 A → 登录并确认 A → 打开 B → 登录并检查 B 的旧聊天 → 读取并预览**。0.5.0 下载包已包含此流程；原版微信运行时会先提示退出，避免与 A 副本争用账号目录。
 
@@ -99,7 +107,7 @@ agent 的详细执行提示词在 [AGENTS.md](AGENTS.md)：从 B 保存单聊，
 
 使用 agent 协助运行仍遵循下方的版本与消息范围。私人工作目录留在本机，只把约定的单聊 bundle 交给对方；不要把密钥、整库或大量聊天正文贴进 agent 对话。
 
-## 开始前
+## Mac 源码操作：开始前
 
 - 当前实测环境：微信 4.1.13、macOS 27.0、Apple Silicon。取钥命令只接受 4.1.13；其他版本需先适配并重新验证。
 - Python 3.14、Homebrew SQLCipher、Xcode Command Line Tools。
@@ -107,7 +115,7 @@ agent 的详细执行提示词在 [AGENTS.md](AGENTS.md)：从 B 保存单聊，
 - 首版只接受单个 `message_0.db` 分片；单聊只支持文本（1）、名片（42）和文件消息（49 的子类型 6）。基础恢复不接受其他分片或不支持类型，不会自动跳过；语音与附件需显式开启实验模式，详见上方说明。
 - 支持范围与实测结论见 [证据与边界](docs/evidence-and-support.md)。本地数据库修改不能保证手机同步。
 
-## 安装与环境检查
+## Mac 源码操作：安装与环境检查
 
 ```sh
 git clone https://github.com/Bccccccs/chat_rescue.git
@@ -119,7 +127,7 @@ python3.14 -m chat_rescue doctor
 
 已安装 Xcode Command Line Tools 时无需重复安装。没有 Homebrew 时，先按 [Homebrew 官方说明](https://brew.sh/)安装。命令在仓库根目录执行，无需 `pip install`，不需要 `sudo` 或关闭 SIP。
 
-## 完整流程
+## Mac 命令行完整流程
 
 请按 [双账号恢复 SOP](docs/recovery-sop.md)执行。先完成 B 的导出，再完成 A 的取钥、预览和应用。
 
@@ -132,18 +140,21 @@ python3.14 -m chat_rescue doctor
 
 ## 常见问题
 
-**误删微信聊天记录，还能恢复吗？** 本项目适用于对方仍保留双方记录、愿意提供该单聊的情况。它从对方保留的记录建立恢复方案，需要满足首版的 Mac、微信版本和消息范围要求。
+**误删微信聊天记录，还能恢复吗？** 本项目适用于对方仍保留双方记录、双方同意恢复该单聊的情况。需要满足对应 Mac / Windows 版本、数据库结构与消息范围要求；对方也已丢失的内容不在本工具的恢复来源中。
 
 **可以用对方的聊天记录恢复自己的视角吗？** 可以为受支持的单聊转换本地发送者映射与发送/接收方向，生成自己的会话候选，再经备份、预览和确认应用。实际电脑显示和可选手机迁移需分别验收。
 
-**不会写代码可以使用吗？** 可以让具备本机文件和终端权限的 agent 按 [AGENTS.md](AGENTS.md) 协助运行；本人完成登录、权限授权、身份确认和结果验收。
+**不会写代码可以使用吗？** 可以先按 [Windows 零基础教程](docs/windows-beginner-guide.md) 或 [Mac 零基础教程](docs/beginner-guide.md) 使用桌面版。需要协助时，可让具备本机文件和终端权限的 agent 按 [AGENTS.md](AGENTS.md) 操作；登录、授权、身份确认和验收由本人完成。
 
-**照片、视频和文件附件也能恢复吗？** 首版不恢复附件内容；支持的文件消息条目不代表附件完整可打开。完整限制见 [支持边界](docs/evidence-and-support.md)。
+**语音、照片、视频和文件附件也能恢复吗？** Mac 0.5.0 与 Windows 0.6.0 均提供默认关闭的媒体实验开关。媒体必须仍有本地内容，并满足密钥、关联和目标证据要求；仅有消息条目或缩略图不能保证原内容可恢复。Windows 0.6.0 扩展标准 SILK、PCM WAV、AMR-NB，以及 MP4/MOV/M4V/AVI/MKV/WebM/3GP/3G2 容器识别，图片包括 JPEG、PNG、GIF、WebP、明确 BMP、HEIF/AVIF、TIFF、JPEG XL 和 WXGF。**识别和保留容器不等于微信能解码播放**；未知格式及缺库/本地内容/图片解密证据时跳过本体并计数，身份/资源冲突、现有库完整性和哈希异常仍停止。Windows DAT V2 独立图片密钥自动获取尚未实机适配，缺证据的图片不会记为恢复成功。详见 [Windows 媒体说明](docs/windows-media.md)、[Mac 语音](docs/voice-recovery.md) 与 [Mac 附件](docs/attachment-recovery.md)。
+
+**聊天分在多个数据库里怎么办？** Windows 支持核验已有的全部规范编号消息分片，再按经验证的原生证据路由恢复；当前源码另增加多媒体库语音处理，仍须唯一目标关联，不自动新建分片。Mac 可检查全部消息分片，恢复写入仍限单消息片/单媒体库。不能把“检查了所有库”当作“所有库都支持写入恢复”。
 
 ## 文档
 
+- [Windows 零基础操作教程](docs/windows-beginner-guide.md)
 - [Windows 安装包与跨电脑部署](docs/windows-deployment.md)
-- [Windows 五步桌面向导](docs/windows-desktop.md)
+- [Windows 桌面向导与历史说明](docs/windows-desktop.md)
 
 - [零基础手把手教程：桌面版从安装到结果检查](docs/beginner-guide.md)
 - [双账号恢复 SOP：可复制的命令与操作顺序](docs/recovery-sop.md)

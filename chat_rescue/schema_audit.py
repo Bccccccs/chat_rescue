@@ -60,8 +60,10 @@ def verify_snapshot(root):
     root=Path(root);rels=database_rels(root)
     receipt=json.loads((root/'export-report.json').read_text(encoding='utf-8'))
     recorded=receipt.get('exported')
-    if (not isinstance(recorded,dict) or not set(rels)<=set(recorded)
-            or set(recorded)-set(rels)-{'message/media_0.db'}):
+    from .voice import single_media
+    from .voice import is_media_rel
+    media = single_media(root) if any(is_media_rel(name) for name in (recorded or {})) else ()
+    if not isinstance(recorded,dict) or set(recorded)!=set((*rels,*media)):
         raise ValueError('unsupported saved export inventory')
     check_paths(root,recorded)
     hashes={rel:digest(root/rel) for rel in recorded}

@@ -170,9 +170,10 @@ class ImageCryptoTests(unittest.TestCase):
         context=att.Images(self.aassets,A);self.assertEqual(context.decode(path.read_bytes())[0],PNG)
         shutil.rmtree(self.bundle);self.image().write_bytes(bytes(x^0x5a for x in PNG))
         with db(self.source/ops.RELS[1]) as c:c.execute('UPDATE MessageResourceDetail SET size=? WHERE type=131073',(len(PNG),))
+        att.path_at(self.aassets,proof).write_bytes(bytes(x^0x6b for x in PNG))
         self.save();self.restore(name='xor')
         path=att.path_at(self.root/'xor/attachment-candidates',att.destination(3,B,'2023-11',TOKEN+'.dat'))
-        self.assertEqual(path.read_bytes(),bytes(x^0x5a for x in PNG))
+        self.assertEqual(path.read_bytes(),bytes(x^0x6b for x in PNG))
 
 
 @unittest.skipIf(os.name=='nt','Mac attachment integration')

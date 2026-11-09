@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="440" viewBox="0 0 1100 440" role="img" aria-label="账号选择：看到名字，不等于已经核验">
+<rect width="1100" height="440" rx="20" fill="#f4f7fc"/>
+<g font-family="Microsoft YaHei, PingFang SC, sans-serif">
+<text x="38" y="55" font-size="28" font-weight="bold" fill="#15304c">账号选择：看到名字，不等于已经核验</text>
+<text x="38" y="90" font-size="17" fill="#526981">示例昵称仅使用通用角色名；同名账号请展开账号详情核对实际路径</text>
+<rect x="38" y="120" width="326" height="238" rx="14" fill="white" stroke="#dce4ef"/>
+<rect x="38" y="120" width="326" height="6" rx="3" fill="#2563eb"/>
+<text x="58" y="161" font-size="21" font-weight="bold" fill="#2563eb">首次未识别</text>
+<text x="58" y="198" font-size="17" fill="#263e55">下拉：账号目录 · 待识别</text>
+<text x="58" y="230" font-size="17" fill="#263e55">先确认本人实际 db_storage</text>
+<text x="58" y="262" font-size="17" fill="#263e55">不知道位置，点“去哪里找？”</text>
+<text x="58" y="294" font-size="17" fill="#263e55">不按目录顺序或时间猜账号</text>
+<rect x="384" y="120" width="326" height="238" rx="14" fill="white" stroke="#dce4ef"/>
+<rect x="384" y="120" width="326" height="6" rx="3" fill="#008578"/>
+<text x="404" y="161" font-size="21" font-weight="bold" fill="#008578">历史已识别</text>
+<text x="404" y="198" font-size="17" fill="#263e55">下拉：示例账号 · 上次识别</text>
+<text x="404" y="230" font-size="17" fill="#263e55">卡片：上次识别（待核验）</text>
+<text x="404" y="262" font-size="17" fill="#263e55">历史昵称只是选择提示</text>
+<text x="404" y="294" font-size="17" fill="#263e55">点读取后重新验证必要库</text>
+<rect x="730" y="120" width="326" height="238" rx="14" fill="white" stroke="#dce4ef"/>
+<rect x="730" y="120" width="326" height="6" rx="3" fill="#7650b3"/>
+<text x="750" y="161" font-size="21" font-weight="bold" fill="#7650b3">本次已核验</text>
+<text x="750" y="198" font-size="17" fill="#263e55">卡片：本次核验昵称</text>
+<text x="750" y="230" font-size="17" fill="#263e55">下拉：昵称 · 本次已核验</text>
+<text x="750" y="262" font-size="17" fill="#263e55">全部必要库和本人身份通过</text>
+<text x="750" y="294" font-size="17" fill="#263e55">两边通过后才能生成预览</text>
+<text x="38" y="403" font-size="16" fill="#526981">刷新保留本人当前选择；新会话不自动选 A/B。目录缺库或旧路径失效会单独提示。</text>
+</g></svg>

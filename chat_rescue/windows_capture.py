@@ -26,6 +26,24 @@ MASK = bytes.fromhex('d2c7442458020000004889442450488b450048844c2448488944254048
 LIMIT = 0x800000000000
 
 
+class ScanFailure(RuntimeError):
+    """Counts and canonical relative database names only; never key material."""
+    def __init__(self, reason, pages, found, counts):
+        required=list(pages)
+        verified_rels=[rel for rel in required if rel in found]
+        missing=[rel for rel in required if rel not in found]
+        self.diagnostic={'version':1,'state':'failed','phase':'key-scan','reason':reason,
+                         'required_count':len(required),'verified_count':len(verified_rels),
+                         'required_databases':required,'verified_databases':verified_rels,
+                         'missing_databases':missing,'counts':dict(counts),'keys_saved':False}
+        explanation={'timeout':'扫描超时','feature-not-found':'未找到已适配的 WCDB 特征',
+                     'incomplete-hmac':'本次扫描未覆盖全部所选数据库',
+                     'no-selected-salt-match':'已解析密钥候选，但候选附带盐值与所选库均不匹配，逐库 HMAC 也未通过；请核对当前微信登录账号与所选目录，仍不匹配时需继续检查该完整版本兼容性'}[reason]
+        names='、'.join(missing[:6])+('等' if len(missing)>6 else '')
+        super().__init__(f'读取未完成：HMAC 已验证 {len(verified_rels)}/{len(required)} 个库；{explanation}。'
+                         f'未通过：{names}。没有保存部分密钥，尚未读取本人昵称。')
+
+
 def app_info(executable):
     if os.name != 'nt' or C.sizeof(C.c_void_p) != 8:
         raise RuntimeError('Windows 实验取钥需要 64 位 Windows Python')
@@ -160,16 +178,24 @@ class Process:
 
 def scan(process, pages, deadline):
     """Resolve Config.Cipher objects; retain only keys verified for all selected pages."""
+    found={}
+    counts={'read_regions':0,'read_chunks':0,'feature_locations':0,'config_objects':0,
+            'object_read_failures':0,'invalid_blob_lengths':0,'blob_read_failures':0,
+            'key_only_literals':0,'salted_key_literals':0,'hmac_checks':0,
+            'salted_literals_without_selected_salt':0,'fallback_hmac_checks':0}
+    checked=set()
     def check_time():
         if time.monotonic() >= deadline:
-            raise RuntimeError('Windows 实验取钥超时；没有保存部分密钥')
+            raise ScanFailure('timeout',pages,found,counts)
 
     def chunks():
         for base, size in process.regions():
+            counts['read_regions']+=1
             tail = b''
             for offset in range(0, size, 1024 * 1024):
                 check_time()
                 data = process.read(base + offset, min(1024 * 1024, size - offset))
+                counts['read_chunks']+=1
                 if data:
                     yield base + offset - len(tail), tail + data
                     tail = data[-127:]
@@ -183,11 +209,12 @@ def scan(process, pages, deadline):
             needles.add(base + pos); start = pos + 1
             if len(needles) > 256:
                 raise ValueError('Config.Cipher 特征过多，拒绝无界扫描')
+    counts['feature_locations']=len(needles)
     if not needles:
-        raise RuntimeError('未找到已知 WCDB 特征；此 4.2 版本布局可能需重新适配')
+        raise ScanFailure('feature-not-found',pages,found,counts)
     def u64(data, offset):
         return struct.unpack_from('<Q', data, offset)[0] if len(data) >= offset + 8 else 0
-    found, seen = {}, set()
+    seen = set()
     for base, data in chunks():
         for address in needles:
             pattern = struct.pack('<QQ', address, len(NEEDLE))
@@ -201,22 +228,44 @@ def scan(process, pages, deadline):
                 if not 0x10000 <= pointer < LIMIT or pointer in seen:
                     continue
                 seen.add(pointer)
+                counts['config_objects']+=1
                 obj = process.read(pointer + 0x88, 0x28)
+                if len(obj)!=0x28:
+                    counts['object_read_failures']+=1;continue
                 length = u64(obj, 0x10)
                 if not 0 < length <= 1024:
+                    counts['invalid_blob_lengths']+=1
                     continue
                 blob = process.read(u64(obj, 8), length)
+                if len(blob)!=length:
+                    counts['blob_read_failures']+=1;continue
                 decoded = bytes(value ^ MASK[i % len(MASK)] for i, value in enumerate(blob))
-                for match in re.finditer(rb"[xX]'([0-9a-fA-F]{64})([0-9a-fA-F]{32})'", decoded):
-                    key, salt = bytes.fromhex(match[1].decode()), bytes.fromhex(match[2].decode())
-                    for rel, page in pages.items():
-                        if page[:16] == salt and verified(key, page):
+                for match in re.finditer(rb"[xX]'([0-9a-fA-F]{64})([0-9a-fA-F]{32})?'", decoded):
+                    key=bytes.fromhex(match[1].decode())
+                    salt=bytes.fromhex(match[2].decode()) if match[2] is not None else None
+                    counts['key_only_literals' if salt is None else 'salted_key_literals']+=1
+                    if salt is not None and not any(page[:16]==salt for page in pages.values()):
+                        counts['salted_literals_without_selected_salt']+=1
+                    # The embedded salt prioritizes work, but does not prove or
+                    # disprove a raw key. Only the selected page's HMAC may accept
+                    # a key; never skip all verification on metadata mismatch.
+                    ordered=sorted(pages.items(),key=lambda item: salt is not None and item[1][:16]!=salt)
+                    for rel, page in ordered:
+                        if (key,rel) in checked:continue
+                        check_time();counts['hmac_checks']+=1
+                        checked.add((key,rel))
+                        if salt is not None and page[:16]!=salt:counts['fallback_hmac_checks']+=1
+                        if verified(key, page):
                             if rel in found and found[rel] != key.hex():
                                 raise ValueError('必要库密钥出现歧义，拒绝保存')
                             found[rel] = key.hex()
                 if set(found) == set(pages):
                     return found
-    raise RuntimeError('未完成四个必要数据库的 HMAC 验证；没有保存部分密钥')
+    reason='incomplete-hmac'
+    if (not found and counts['salted_key_literals']>0 and counts['key_only_literals']==0
+            and counts['salted_literals_without_selected_salt']==counts['salted_key_literals']):
+        reason='no-selected-salt-match'
+    raise ScanFailure(reason,pages,found,counts)
 
 
 def capture(pid, executable, root, owner, output, timeout=120, *, include_voice=False):
@@ -231,7 +280,7 @@ def capture(pid, executable, root, owner, output, timeout=120, *, include_voice=
         single_media(root)
     rels = inspection_files(root, include_voice)
     check_paths(root, [r + s for r in rels for s in ('', '-wal', '-shm')])
-    if output.exists() or output.with_suffix('.capture.json').exists():
+    if output.exists() or output.with_suffix('.capture.json').exists() or output.with_suffix('.capture-failed.json').exists():
         raise FileExistsError('输出或回执已存在，请保留现场并使用新文件名')
     if output.is_relative_to(root):
         raise ValueError('密钥输出必须位于微信目录之外')
@@ -246,6 +295,13 @@ def capture(pid, executable, root, owner, output, timeout=120, *, include_voice=
     process = Process(pid, metadata['executable'])
     try:
         keys = scan(process, pages, time.monotonic() + timeout)
+    except ScanFailure as error:
+        failure_path=output.with_suffix('.capture-failed.json')
+        report={**error.diagnostic,'file_version':metadata.get('file_version','unknown'),'executable_sha256':metadata['sha256']}
+        try:private_json(failure_path,report)
+        except OSError:
+            raise RuntimeError(str(error)+' 诊断报告写入失败，请保留当前任务目录。') from None
+        raise RuntimeError(str(error)+' 诊断报告：'+str(failure_path)) from None
     finally:
         process.close()
     if (set(keys) != set(rels) or inspection_files(root, include_voice) != rels

@@ -4,14 +4,20 @@ Layout checks and byte comparisons are offline evidence, never client playback
 evidence. Version 5 deliberately cannot be read by the old Windows desktop.
 """
 WINDOWS_MEDIA = 'windows-media-layout-v1'
+WINDOWS_VOICE_SHARDS = 'windows-voice-shards-v1'
+WINDOWS_VOICE_INVENTORY = 'windows-voice-nonzero-inventory-v1'
 WINDOWS_VOICE = 'windows-voice-silk-layout-v1'
 WINDOWS_ATTACHMENTS = 'windows-attachments-layout-v1'
+WINDOWS_CONTAINERS = 'windows-media-containers-v1'
+WINDOWS_SKIP_FORMATS = 'windows-skip-unsupported-media-v1'
+WINDOWS_SKIP_UNAVAILABLE = 'windows-skip-unavailable-media-v1'
+WINDOWS_SKIP_STATES = 'windows-skip-unsupported-attachment-state-v1'
 
 
 def windows_capabilities(voice=False, attachments=False):
     if not (voice or attachments):
         raise ValueError('Windows 媒体模式必须显式选择语音或附件')
-    return [WINDOWS_MEDIA] + ([WINDOWS_VOICE] if voice else []) + ([WINDOWS_ATTACHMENTS] if attachments else [])
+    return [WINDOWS_MEDIA, WINDOWS_CONTAINERS, WINDOWS_SKIP_UNAVAILABLE] + ([WINDOWS_VOICE, WINDOWS_VOICE_SHARDS, WINDOWS_VOICE_INVENTORY] if voice else []) + ([WINDOWS_ATTACHMENTS, WINDOWS_SKIP_FORMATS, WINDOWS_SKIP_STATES] if attachments else [])
 
 
 def windows_options(value):
@@ -37,27 +43,27 @@ def check_voice_layout(root):
     from pathlib import Path
     import re
     from .workflow import connect, ident
-    from .voice import MEDIA, VOICE_COLUMNS, schema, single_media
-    single_media(root)
-    with connect(Path(root)/MEDIA) as c:
-        schema(c)
-        tables={row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-        if tables!={'VoiceInfo','Name2Id'}:
-            raise ValueError('Windows 语音库存在未适配表，拒绝猜测关联')
-        for table,columns in (('VoiceInfo',VOICE_COLUMNS),('Name2Id',[('user_name','TEXT')])):
-            definition=c.execute('SELECT sql FROM sqlite_master WHERE type=\'table\' AND name=?',(table,)).fetchone()[0]
-            if re.search(r'\b(CHECK|COLLATE|GENERATED|REFERENCES|WITHOUT|STRICT|UNIQUE)\b',definition,re.I):
-                raise ValueError('Windows 语音库存在未适配约束')
-            expected=[(name,kind,0,"'0'" if name=='data_index' else None,1 if table=='Name2Id' else 0) for name,kind in columns]
-            if [tuple(row)[1:] for row in c.execute('PRAGMA table_info('+table+')')]!=expected:
-                raise ValueError('Windows 语音库约束或默认值尚未适配')
-            if c.execute('PRAGMA foreign_key_list('+table+')').fetchone():
-                raise ValueError('Windows 语音库存在未适配外键')
-        indexes=[]
-        for row in c.execute('PRAGMA index_list(VoiceInfo)'):
-            fields=[(item[2],item[3],item[4]) for item in c.execute('PRAGMA index_xinfo('+ident(row[1])+')') if item[5]]
-            indexes.append((row[2],row[4],fields))
-        expected=[(1,0,[(name,0,'BINARY') for name in ('chat_name_id','create_time','local_id','data_index')]),
-                  (0,0,[(name,0,'BINARY') for name in ('chat_name_id','svr_id')])]
-        if sorted(indexes)!=sorted(expected):
-            raise ValueError('Windows 语音库索引尚未适配')
+    from .voice import VOICE_COLUMNS, schema, single_media
+    for rel in single_media(root):
+        with connect(Path(root)/rel) as c:
+            schema(c)
+            tables={row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+            if tables!={'VoiceInfo','Name2Id'}:
+                raise ValueError('Windows 语音库存在未适配表，拒绝猜测关联')
+            for table,columns in (('VoiceInfo',VOICE_COLUMNS),('Name2Id',[('user_name','TEXT')])):
+                definition=c.execute('SELECT sql FROM sqlite_master WHERE type=\'table\' AND name=?',(table,)).fetchone()[0]
+                if re.search(r'\b(CHECK|COLLATE|GENERATED|REFERENCES|WITHOUT|STRICT|UNIQUE)\b',definition,re.I):
+                    raise ValueError('Windows 语音库存在未适配约束')
+                expected=[(name,kind,0,"'0'" if name=='data_index' else None,1 if table=='Name2Id' else 0) for name,kind in columns]
+                if [tuple(row)[1:] for row in c.execute('PRAGMA table_info('+table+')')]!=expected:
+                    raise ValueError('Windows 语音库约束或默认值尚未适配')
+                if c.execute('PRAGMA foreign_key_list('+table+')').fetchone():
+                    raise ValueError('Windows 语音库存在未适配外键')
+            indexes=[]
+            for row in c.execute('PRAGMA index_list(VoiceInfo)'):
+                fields=[(item[2],item[3],item[4]) for item in c.execute('PRAGMA index_xinfo('+ident(row[1])+')') if item[5]]
+                indexes.append((row[2],row[4],fields))
+            expected=[(1,0,[(name,0,'BINARY') for name in ('chat_name_id','create_time','local_id','data_index')]),
+                      (0,0,[(name,0,'BINARY') for name in ('chat_name_id','svr_id')])]
+            if sorted(indexes)!=sorted(expected):
+                raise ValueError('Windows 语音库索引尚未适配')

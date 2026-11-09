@@ -38,6 +38,8 @@ py -3.14 -m chat_rescue roots --search-path 'D:\你的微信数据\xwechat_files
 
 `init-work` 只创建新目录，拒绝覆盖，Windows 设置并检查 NTFS ACL。把合法取得的本账号密钥清单复制到该目录，确认它继承了私有权限。Windows 不把 `chmod 600` 当作访问控制；密钥 ACL 只接受当前用户、SYSTEM、Administrators 以及所有者为上述主体时的 OWNER RIGHTS。FAT/exFAT 或不能设置/验证 ACL 的位置会失败。
 
+2026-11-08 SID 兼容修复（源码及本地测试包，尚未更新公开安装包）：当前用户 SID 改为通过 `OpenProcessToken` / `GetTokenInformation(TokenUser)` 读取本进程令牌，再由 `ConvertSidToStringSidW` 转为字符串，不再解析 `whoami` 文本，不依赖中文用户名或电脑名的命令输出编码。系统接口失败仍停止，并报告接口名及 Windows 错误码；不使用环境变量猜测 SID、不放宽 ACL、不自动提权。出现“无法核对当前 Windows 用户 SID”不等于缺少微信数据库或 SQLCipher。终端输出正常不能证明桌面后台收到的原始输出正常，不能仅凭中文名称认定根因。接口契约见 [Microsoft GetTokenInformation](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation)。
+
 密钥清单为 UTF-8 JSON（接受 BOM），结构是 `{"keys":{"message/message_0.db":{"enc_key":"<64位十六进制原始密钥>"}, ...}}`，四个库分别配置。也支持 Windows 绝对路径或数据库前 16 字节 salt 的十六进制作为索引。不在终端输入、打印或向 agent 发送真实密钥。
 
 SQLCipher DLL 及依赖需从可信来源提供，普通 SQLite DLL 不适用；`SQLCIPHER_LIBRARY` 使用绝对路径。DLL 依赖可放在同目录。运行依赖就绪仅代表 `doctor` 通过，不代表密钥、身份或微信结构已经验证。SQLCipher 配置依据 [官方 API](https://www.zetetic.net/sqlcipher/sqlcipher-api/)。Python 可从 [官方 Windows 下载页](https://www.python.org/downloads/windows/)安装。

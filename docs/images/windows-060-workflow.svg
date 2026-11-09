@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="440" viewBox="0 0 1100 440" role="img" aria-label="Windows 0.6.0：三步恢复一段单聊">
+<rect width="1100" height="440" rx="20" fill="#f4f7fc"/>
+<g font-family="Microsoft YaHei, PingFang SC, sans-serif">
+<text x="38" y="55" font-size="28" font-weight="bold" fill="#15304c">Windows 0.6.0：三步恢复一段单聊</text>
+<text x="38" y="90" font-size="17" fill="#526981">通用操作示意 · A 是目标账号，B 是来源账号 · 不是恢复成功凭证</text>
+<rect x="38" y="120" width="326" height="238" rx="14" fill="white" stroke="#dce4ef"/>
+<rect x="38" y="120" width="326" height="6" rx="3" fill="#2563eb"/>
+<text x="58" y="161" font-size="21" font-weight="bold" fill="#2563eb">1  准备并读取账号</text>
+<text x="58" y="198" font-size="17" fill="#263e55">自动检查本机官方微信</text>
+<text x="58" y="230" font-size="17" fill="#263e55">明确选择 A 目标、B 来源</text>
+<text x="58" y="262" font-size="17" fill="#263e55">任意顺序登录并分别读取</text>
+<text x="58" y="294" font-size="17" fill="#263e55">双方本次核验通过再继续</text>
+<rect x="384" y="120" width="326" height="238" rx="14" fill="white" stroke="#dce4ef"/>
+<rect x="384" y="120" width="326" height="6" rx="3" fill="#008578"/>
+<text x="404" y="161" font-size="21" font-weight="bold" fill="#008578">2  检查恢复预览</text>
+<text x="404" y="198" font-size="17" fill="#263e55">正常退出整个微信程序</text>
+<text x="404" y="230" font-size="17" fill="#263e55">生成 来源 → 目标 替换预览</text>
+<text x="404" y="262" font-size="17" fill="#263e55">核对移除、导入、跳过数量</text>
+<text x="404" y="294" font-size="17" fill="#263e55">核对日期范围与原件位置</text>
+<rect x="730" y="120" width="326" height="238" rx="14" fill="white" stroke="#dce4ef"/>
+<rect x="730" y="120" width="326" height="6" rx="3" fill="#7650b3"/>
+<text x="750" y="161" font-size="21" font-weight="bold" fill="#7650b3">3  应用与结果</text>
+<text x="750" y="198" font-size="17" fill="#263e55">确认本次具体预览后应用</text>
+<text x="750" y="230" font-size="17" fill="#263e55">成功回执后打开 A 验收</text>
+<text x="750" y="262" font-size="17" fill="#263e55">媒体逐项打开或播放检查</text>
+<text x="750" y="294" font-size="17" fill="#263e55">需要手机记录时单独迁移</text>
+<text x="38" y="403" font-size="16" fill="#526981">B 保持只读；A 的这段单聊按 B 重建。预览生成前不改真实聊天库。</text>
+</g></svg>

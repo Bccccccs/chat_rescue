@@ -59,7 +59,7 @@ python3.14 -m chat_rescue save-chat \
   --output "$WORK/chat"
 ```
 
-导出保留 `Name2Id` 等表的隐式 rowid，不修改原库。Mac 导出全部编号消息分片，以及 `message/message_resource.db`、`session/session.db`、`contact/contact.db`；Windows 仍限原来的四库。语音模式另需媒体库。输出沿用原相对路径，`_encrypted_snapshot/` 保留加密原件和存在的 WAL/SHM，`export-report.json` 绑定账号父目录、完整消息分片清单及逐文件哈希。`save-chat` 仍拒绝多消息分片，并校验报告绑定，不接受任意拼装或改写的明文库。`--owner` 是源库所属账号 B 的内部 wxid，`--peer` 是 A 的内部 wxid。仅支持指定双方的单聊 bundle，不把整库当作分享产物。
+导出保留 `Name2Id` 等表的隐式 rowid，不修改原库。Mac 和 Windows 导出全部编号消息分片，以及 `message/message_resource.db`、`session/session.db`、`contact/contact.db`。语音模式另需媒体库：当前 Windows 源码枚举全部已有规范编号 `media_N.db`，Mac/legacy 仍限 `media_0.db`；所有必要库逐片核验，不能只检查第零片。输出沿用原相对路径，`_encrypted_snapshot/` 保留加密原件和存在的 WAL/SHM，`export-report.json` 绑定账号父目录、完整消息分片清单及逐文件哈希。Mac/legacy 媒体的 `save-chat` 仍拒绝多消息分片；Windows 媒体 bundle 支持多消息片，恢复使用可验证分片的 `plan-replace`。各模式均校验报告绑定，不接受任意拼装或改写的明文库。`--owner` 是源库所属账号 B 的内部 wxid，`--peer` 是 A 的内部 wxid。仅支持指定双方的单聊 bundle，不把整库当作分享产物。
 
 bundle 包含原始消息字段、BLOB 的 base64 表示、参与者映射、会话摘要和资源元数据，不包含密钥。base64 是编码，不是加密。消息中的文件卡片、名片或资源路径不能证明附件内容完整，工具不自动下载附件。
 

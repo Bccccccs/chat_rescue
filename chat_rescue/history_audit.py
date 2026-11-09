@@ -11,6 +11,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from chat_rescue.workflow import connect, ident, table_for, digest, private_json, pack
+from chat_rescue.voice import single_media
 from chat_rescue.shards import message_rels, database_rels, mutable_rels, check_paths
 from chat_rescue.operations import fresh, export_root, check_owner
 from chat_rescue.runtime import require_private, ensure_closed
@@ -196,7 +197,7 @@ def audit_task(task):
     candidate, candidate_rows = read_chat(task/'A-plan/recovered-plain', b['owner'])
     plan = json.loads((task/'A-plan/plan.json').read_text(encoding='utf-8'))
     rels = (*mutable_rels(task/'A-plan/recovered-plain'),
-            *(('message/media_0.db',) if options.get('include_voice') else ()))
+            *(single_media(task/'A-plan/recovered-plain') if options.get('include_voice') else ()))
     if set(plan['candidates']) != set(rels):
         raise ValueError('candidate shard inventory mismatch')
     check_paths(task/'A-plan/candidates', rels)

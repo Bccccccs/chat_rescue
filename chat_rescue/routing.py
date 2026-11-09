@@ -64,7 +64,7 @@ def routing_inventory(root, owner, peer):
         {'path':times[stamp],'timestamp':stamp,'independent_witnesses':len(bindings[times[stamp]][1])} for stamp in stamps]}
 
 
-def routed_restore(bundle, base, owner, output, inventory, *, include_voice=False, include_attachments=False, target_asset_root=None):
+def routed_restore(bundle, base, owner, output, inventory, *, include_voice=False, include_attachments=False, target_asset_root=None, voice_routing=None):
     bundle,base,output=Path(bundle),Path(base),Path(output)
     manifest=json.loads((bundle/'manifest.json').read_text(encoding='utf-8'))
     if manifest.get('version') not in ((5,) if include_voice or include_attachments else (1,)) or manifest.get('sha256')!=digest(bundle/'conversation.json'):
@@ -93,7 +93,7 @@ def routed_restore(bundle, base, owner, output, inventory, *, include_voice=Fals
         groups[definitions[index]['path']].append(message)
     stage_root=fresh(output.parent/'routing-stages');previous=base
     added=skipped=variants=0;summary=[];result=None
-    assets={'originals':{},'candidates':{}};media_counts={};asset_sources={}
+    assets={'originals':{},'candidates':{}};media_counts={};asset_sources={};state_counts={}
     for index,definition in enumerate(definitions):
         rel=definition['path'];messages=groups[rel]
         if not messages:continue
@@ -111,11 +111,14 @@ def routed_restore(bundle, base, owner, output, inventory, *, include_voice=Fals
         private_json(chunk/'manifest.json',{'version':manifest['version'],'sha256':digest(chunk/'conversation.json'),'message_count':len(messages)})
         next_root=stage_root/('plain-'+str(index))
         result=prepare_plain_restore(chunk,previous,owner,next_root,destination_shard=rel,
-            include_voice=include_voice,include_attachments=include_attachments,target_asset_root=target_asset_root)
+            include_voice=include_voice,include_attachments=include_attachments,target_asset_root=target_asset_root,voice_routing=voice_routing)
         for key,value in result.items():
-            if key.startswith(('voice_','image_','video_','file_','attachments_','attachment_resource_')) and type(value) is int:
+            if key.startswith(('voice_','image_','video_','file_','attachments_','attachment_resource_','attachment_state_')) and type(value) is int:
                 media_counts[key]=media_counts.get(key,0)+value
         if include_attachments:
+            for row in result.get('attachment_state_skip_details',[]):
+                state_key=tuple(row[name] for name in ('side','kind','status','upload_status'))
+                state_counts[state_key]=state_counts.get(state_key,0)+row['count']
             for key in assets:
                 for name,value in result['assets'][key].items():
                     if name in assets[key] and assets[key][name]!=value:raise ValueError('跨分片附件路径或内容冲突')
@@ -128,8 +131,8 @@ def routed_restore(bundle, base, owner, output, inventory, *, include_voice=Fals
         previous=next_root
     if result is None:raise ValueError('没有可导入的普通消息')
     output=fresh(output)
-    from .voice import MEDIA
-    for rel in (*database_rels(previous), *((MEDIA,) if include_voice else ())):
+    from .voice import MEDIA, single_media
+    for rel in (*database_rels(previous), *(single_media(previous) if include_voice else ())):
         dest=output/rel;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(previous/rel,dest)
     shutil.copy2(previous/'direction-profile.json',output/'direction-profile.json')
     for name,path in asset_sources.items():
@@ -147,9 +150,12 @@ def routed_restore(bundle, base, owner, output, inventory, *, include_voice=Fals
     result.update(added=added,skipped=skipped,timestamp_variants_preserved=variants,
         source_message_shards=data.get('source_shards',[]),target_shard_imports=summary,
         shard_routing=inventory,invalidated_fts_ranges=invalidated,client_search_index_verified=False,
-        changed_databases=[rel for rel in (*mutable_rels(base), *((MEDIA,) if include_voice else ())) if digest(base/rel)!=digest(output/rel)],
+        changed_databases=[rel for rel in (*mutable_rels(base), *(single_media(base) if include_voice else ())) if digest(base/rel)!=digest(output/rel)],
         **media_counts)
-    if include_attachments:result['assets']=assets
+    if include_attachments:
+        result['assets']=assets
+        result['attachment_state_skip_details']=[dict(zip(('side','kind','status','upload_status'),key),count=count)
+            for key,count in state_counts.items()]
     # Verify IDs, timestamps, shard destination and role transformation before encryption.
     expected={m['fields']['server_id']:(m['fields']['create_time'],rel)
               for rel,messages in groups.items() for m in messages}

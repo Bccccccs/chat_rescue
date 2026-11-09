@@ -9,6 +9,7 @@ import re
 import shutil
 import sqlite3
 from .runtime import make_private
+from .voice import single_media
 from .shards import message_rels, database_rels, mutable_rels, check_paths
 
 RELS = ('message/message_0.db', 'message/message_resource.db', 'session/session.db')
@@ -240,6 +241,8 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
         raise ValueError('only two different personal WeChat identities are supported')
     shards = message_rels(root)
     profile = plain_profile(root)
+    if include_voice and profile not in WINDOWS_PROFILES and len(single_media(root)) != 1:
+        raise ValueError('Mac/legacy 语音恢复仍仅支持单个媒体库')
     if platform.system() == 'Darwin' or ((include_voice or include_attachments) and profile not in WINDOWS_PROFILES):
         _single_shard(root)
     check_paths(root, database_rels(root))
@@ -249,7 +252,7 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
         account = report.get('account_directory', '')
         if account != owner and not account.startswith(owner + '_'):
             raise ValueError('owner 与导出账号目录不匹配')
-        expected = (*database_rels(root), *(('message/media_0.db',) if include_voice else ()))
+        expected = (*database_rels(root), *(single_media(root) if include_voice else ()))
         if set(report.get('exported', {})) != set(expected):
             raise ValueError('导出数据库分片清单 inventory 不完整或改变')
         if any(digest(root / rel) != value for rel, value in report['exported'].items()):
@@ -360,11 +363,13 @@ def save_chat(plain_root, owner, peer, output, *, include_voice=False, allow_mis
             from .media import check_voice_layout
             check_voice_layout(root)
         payload.update(version=2, capabilities=[CAPABILITY],
-                       voices=collect(root, peer, messages, output, allow_missing_voice))
+                       voices=collect(root, peer, messages, output, allow_missing_voice, extended=profile in WINDOWS_PROFILES))
     if include_attachments:
         from . import attachments as att
         asset_root = att.resolve_root(root, asset_root)
-        entries, originals = att.collect(root, asset_root, owner, peer, messages, output, allow_missing_attachments)
+        entries, originals = att.collect(root, asset_root, owner, peer, messages, output, allow_missing_attachments,
+                                         skip_unsupported=profile in WINDOWS_PROFILES,skip_unavailable=profile in WINDOWS_PROFILES,
+                                         skip_unsupported_state=profile in WINDOWS_PROFILES)
         payload.update(version=3, capabilities=payload.get('capabilities', [])+[att.CAPABILITY],
                        attachments=entries, attachment_originals=originals)
     from .media import format_for
@@ -390,7 +395,7 @@ def _insert(c, table, row):
                      + ') VALUES (' + ','.join('?' for _ in row) + ')', tuple(row.values())).lastrowid
 
 
-def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_voice=False, include_attachments=False, target_asset_root=None, destination_shard=None):
+def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_voice=False, include_attachments=False, target_asset_root=None, destination_shard=None, voice_routing=None):
     os.umask(0o077)
     bundle, target_root, output = Path(bundle), Path(target_root), Path(output)
     manifest = json.loads((bundle / 'manifest.json').read_text(encoding='utf-8'))
@@ -429,11 +434,13 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
     voice_mode = include_voice
     audios = {}
     if voice_mode:
-        from .voice import CAPABILITY, MEDIA, single_media, read_entries
+        from .voice import CAPABILITY, read_entries
         if not windows_media and ((data['version'] == 2 and data.get('capabilities') != [CAPABILITY])
                 or source_profile != LEGACY_PROFILE or target_profile != LEGACY_PROFILE):
             raise ValueError('语音能力或方向配置不受支持')
         single_media(target_root)
+        if not windows_media and len(single_media(target_root)) != 1:
+            raise ValueError('Mac/legacy 语音恢复仍仅支持单个媒体库')
         if data['version'] in (2,3,5):
             audios = read_entries(bundle, data)
     if platform.system() == 'Darwin' or ((include_voice or include_attachments) and not windows_media):
@@ -474,7 +481,7 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
         if users != {target_owner, peer}:
             raise ValueError('log into target account and sync/open the peer contact first')
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
-    write_rels = (*mutable_rels(target_root), *((MEDIA,) if voice_mode else ()))
+    write_rels = (*mutable_rels(target_root), *(single_media(target_root) if voice_mode else ()))
     for rel in (*write_rels, 'contact/contact.db'):
         (output / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(target_root / rel, output / rel)
@@ -677,7 +684,8 @@ def prepare_plain_restore(bundle, target_root, target_owner, output, *, include_
     voice_counts = {}
     if voice_mode:
         from .voice import restore
-        voice_counts = restore(output, peer, data['messages'], local_ids, added_ids, audios)
+        voice_counts = restore(output, peer, data['messages'], local_ids, added_ids, audios,
+                               routes=voice_routing,extended=windows_media)
     for rel in write_rels:
         with connect(output / rel) as c:
             if [tuple(r) for r in c.execute('PRAGMA integrity_check')] != [('ok',)]:

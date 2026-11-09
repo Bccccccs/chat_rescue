@@ -239,9 +239,12 @@ def verify_keys(root, keys, *, include_voice=False):
     from .operations import state
     before = state(root, include_voice)
     for rel in required:
-        with DB(root / rel, load_key(keys, root / rel)) as database:
-            if database.query('PRAGMA integrity_check;') != [{'integrity_check': 'ok'}]:
-                raise ValueError('必要数据库完整性验证失败：' + rel)
+        try:
+            with DB(root / rel, load_key(keys, root / rel)) as database:
+                if database.query('PRAGMA integrity_check;') != [{'integrity_check': 'ok'}]:
+                    raise ValueError('必要数据库完整性验证失败：' + rel)
+        except RuntimeError as error:
+            raise ValueError('必要数据库验证未完成：'+rel+'；'+str(error)+'。请核对本次账号目录及配套密钥；本次未应用，不要删除数据库或 WAL/SHM') from None
     after = state(root, include_voice)
     if (inspection_files(root, include_voice) != required or set(after) != set(before)
             or any(after[rel] != value for rel,value in before.items() if not rel.endswith('-shm'))):

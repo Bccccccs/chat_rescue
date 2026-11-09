@@ -124,8 +124,11 @@ def make_sync_plan(a, b, output, *, include_voice=False, include_attachments=Fal
 
 
 def apply_sync_plan(output):
-    supported_host(); ops.ensure_closed()
+    supported_host()
     output = Path(output).resolve(strict=True)
+    from .portable_task import require_current_plan
+    require_current_plan(output)
+    ops.ensure_closed()
     with exclusive_lock(output/'.sync-lock'):
         if (output/'sync-started.json').exists():
             raise ValueError('此计划已尝试应用，请查看回执；不要重复执行')
@@ -182,8 +185,11 @@ def apply_sync_plan(output):
 
 def undo_sync_plan(output):
     """Undo only an unchanged, fully applied plan; preserve pre-undo files."""
-    supported_host(); ops.ensure_closed()
+    supported_host()
     output=Path(output).resolve(strict=True)
+    from .portable_task import require_current_plan
+    require_current_plan(output)
+    ops.ensure_closed()
     with exclusive_lock(output/'.sync-lock'):
         if (output/'undo-started.json').exists():
             raise ValueError('撤回已尝试执行，请查看本机回执')

@@ -69,6 +69,139 @@ class WindowsMediaTests(unittest.TestCase):
         root,keys=account;candidate=Path(str(root/MEDIA)+'.media-test')
         encrypt_database(plain/MEDIA,candidate,root/MEDIA,keys);os.replace(candidate,root/MEDIA)
 
+    def test_unknown_source_attachment_states_skip_bodies_and_keep_messages_apply_undo(self):
+        with db(self.b_plain/ops.ALL[0]) as c:
+            c.execute('UPDATE '+table_for(A)+' SET status=27,upload_status=8 WHERE local_type IN (3,43,?)',(FILE,))
+        self.install(self.source,self.b_plain); b_before=ops.state(self.source[0],True)
+        with patch.object(ops,'ensure_closed'):
+            result=self.plan('unknown-states');report=result['directions']['A']
+            self.assertEqual(report['added'],4)
+            self.assertEqual((report['image_source_state_unsupported'],report['video_source_state_unsupported'],report['file_source_state_unsupported']),(1,1,1))
+            self.assertEqual(report['attachment_state_skipped'],3)
+            self.assertEqual((report['image_added'],report['video_added'],report['file_added'],report['voice_added']),(0,0,0,1))
+            self.assertEqual(report['assets']['candidates'],{})
+            with db(self.root/'unknown-states/A-plan/recovered-plain'/ops.ALL[0]) as c:
+                self.assertEqual(c.execute('SELECT count(*) FROM '+table_for(B)+' WHERE status=27 AND upload_status=8').fetchone()[0],3)
+            self.assertEqual(sync.apply_sync_plan(self.root/'unknown-states')['state'],'applied')
+            self.assertEqual(sync.undo_sync_plan(self.root/'unknown-states')['state'],'undone')
+        self.assertEqual(ops.state(self.target[0],True),self.a_before)
+        self.assertEqual(ops.state(self.source[0],True),b_before)
+
+    def test_unknown_state_bundle_requires_exact_skip_reason_capability_and_no_payload(self):
+        with db(self.b_plain/ops.ALL[0]) as c:c.execute('UPDATE '+table_for(A)+' SET status=27 WHERE local_type=3')
+        self.install(self.source,self.b_plain)
+        with patch.object(ops,'ensure_closed'):self.plan('state-bundle')
+        bundle=self.root/'state-bundle/B-chat'
+        from chat_rescue.workflow import unpack
+        data=unpack(json.loads((bundle/'conversation.json').read_text()))
+        entry=next(e for e in data['attachments'] if e['kind']==3)
+        self.assertEqual(entry['skip_reason'],'source-state-unsupported');self.assertEqual(entry['files'],[])
+        from copy import deepcopy
+        from chat_rescue.media import WINDOWS_SKIP_STATES
+        bad=deepcopy(data);bad['capabilities'].remove(WINDOWS_SKIP_STATES)
+        with self.assertRaises(ValueError):att.read_entries(bundle,bad)
+        bad=deepcopy(data);next(e for e in bad['attachments'] if e['kind']==3)['files']=[{}]
+        with self.assertRaises(ValueError):att.read_entries(bundle,bad)
+        bad=deepcopy(data);next(m for m in bad['messages'] if m['fields']['local_type']==3)['fields']['status']=3
+        with self.assertRaises(ValueError):att.read_entries(bundle,bad)
+        with self.assertRaisesRegex(ValueError,'状态'):
+            att.collect(self.b_plain,self.source[0].parent,B,A,data['messages'],self.root/'legacy-state')
+
+    def test_unknown_target_attachment_state_skips_only_that_body(self):
+        with patch.object(ops,'ensure_closed'):self.plan('target-state-source')
+        bundle=self.root/'target-state-source/B-chat'
+        from chat_rescue.workflow import unpack
+        data=unpack(json.loads((bundle/'conversation.json').read_text()))
+        with db(self.a_plain/ops.ALL[0]) as c:
+            c.execute('UPDATE '+table_for(B)+' SET server_id=101,local_type=3,status=28,upload_status=0 WHERE server_id=900')
+        assets,counts=att.prepare(bundle,data,self.a_plain,self.target[0].parent,A,self.root/'target-state-bodies')
+        self.assertEqual(counts['image_target_state_unsupported'],1)
+        self.assertEqual(counts['attachment_state_skipped'],1)
+        self.assertEqual((counts['video_added'],counts['file_added']),(1,1))
+        self.assertFalse(any(path.endswith(TOKEN+'.dat') for path in assets['candidates']))
+
+    def test_unknown_state_does_not_hide_resource_identity_conflict(self):
+        with db(self.b_plain/ops.ALL[0]) as c:c.execute('UPDATE '+table_for(A)+' SET status=27 WHERE local_type=3')
+        with db(self.b_plain/ops.ALL[1]) as c:c.execute('UPDATE MessageResourceInfo SET message_create_time=0 WHERE message_svr_id=101')
+        self.install(self.source,self.b_plain)
+        with patch.object(ops,'ensure_closed'),self.assertRaisesRegex(ValueError,'identity collision'):
+            self.plan('bad-state-identity')
+
+    def test_unknown_image_format_skips_body_and_keeps_other_media_and_message(self):
+        path=att.path_at(self.source[0].parent,att.destination(3,A,'2023-11',TOKEN+'.dat'))
+        path.write_bytes(b'unsupported-image'.ljust(len(PNG), b'x'))
+        with patch.object(ops,'ensure_closed'):
+            result=self.plan('unsupported-image')
+        report=result['directions']['A']
+        self.assertEqual(report['added'],4)
+        self.assertEqual(report['image_unsupported'],1)
+        self.assertEqual((report['video_added'],report['file_added'],report['voice_added']),(1,1,1))
+        self.assertFalse(any(name.endswith(TOKEN+'.dat') for name in report['assets']['candidates']))
+        self.assertIn(path.relative_to(self.source[0].parent).as_posix(),result['original_assets']['B'])
+
+    def test_unknown_video_extension_is_reported_as_skipped_not_missing(self):
+        path=att.path_at(self.source[0].parent,att.destination(43,A,'2023-11',VTOKEN+'.mp4'))
+        path.rename(path.with_suffix('.mkv'))
+        with patch.object(ops,'ensure_closed'):
+            result=self.plan('unsupported-video')
+        report=result['directions']['A']
+        self.assertEqual((report['added'],report['video_unsupported'],report['image_added']),(4,1,1))
+
+    def test_wav_voice_and_mov_payload_survive_encrypted_plan(self):
+        from test_media_containers import wav
+        with db(self.b_plain/MEDIA) as c:
+            c.execute('UPDATE VoiceInfo SET voice_data=? WHERE svr_id=104',(wav(),))
+        self.encrypt_media(self.source,self.b_plain)
+        path=att.path_at(self.source[0].parent,att.destination(43,A,'2023-11',VTOKEN+'.mp4'))
+        body=VIDEO[:8]+b'qt  '+VIDEO[12:]
+        path.write_bytes(body);path.rename(path.with_suffix('.mov'))
+        with patch.object(ops,'ensure_closed'):
+            result=self.plan('wav-mov')
+        report=result['directions']['A']
+        self.assertEqual((report['voice_added'],report['video_added']),(1,1))
+        plan=Path(report['plan'])
+        with db(plan/'recovered-plain'/MEDIA) as c:
+            self.assertEqual(c.execute('SELECT voice_data FROM VoiceInfo WHERE svr_id=104').fetchone()[0],wav())
+        self.assertEqual((plan/'attachment-candidates'/att.destination(43,B,'2023-11',VTOKEN+'.mov')).read_bytes(),body)
+
+    def test_nonzero_only_media_files_apply_and_undo_without_inventing_zero(self):
+        for account,owner,relative in ((self.target,A,'message/media_5.db'),(self.source,B,'message/media_7.db')):
+            root,keys=account
+            (root/MEDIA).rename(root/relative)
+            value=json.loads(keys.read_text(encoding='utf-8'))
+            value['keys'][relative]=value['keys'].pop(MEDIA)
+            keys.write_text(json.dumps(value),encoding='utf-8')
+            receipt_path=keys.with_suffix('.capture.json')
+            receipt=json.loads(receipt_path.read_text(encoding='utf-8'))
+            receipt['verified_databases']=list(ops.inspection_files(root,True))
+            receipt_path.write_text(json.dumps(receipt),encoding='utf-8')
+        before_a,before_b=ops.state(self.target[0],True),ops.state(self.source[0],True)
+        with patch.object(ops,'ensure_closed'):
+            result=self.plan('nonzero-only')
+            self.assertEqual(result['directions']['A']['voice_added'],1)
+            self.assertEqual(sync.apply_sync_plan(self.root/'nonzero-only')['state'],'applied')
+            self.assertEqual(sync.undo_sync_plan(self.root/'nonzero-only')['state'],'undone')
+        self.assertEqual(ops.state(self.target[0],True),before_a)
+        self.assertEqual(ops.state(self.source[0],True),before_b)
+        self.assertFalse((self.target[0]/MEDIA).exists())
+
+    def test_corrupt_known_image_is_not_silently_skipped(self):
+        path=att.path_at(self.source[0].parent,att.destination(3,A,'2023-11',TOKEN+'.dat'))
+        path.write_bytes(PNG[:-1]+bytes([PNG[-1]^1]))
+        with patch.object(ops,'ensure_closed'),self.assertRaises(ValueError):
+            self.plan('corrupt-image')
+
+    def test_unsupported_valid_palette_bmp_skips_only_image_body(self):
+        # Valid uncompressed 1x1 8-bit indexed BMP, intentionally outside BI_RGB 24/32 support.
+        pixels=b'\0'*4;offset=54+8
+        raw=b'BM'+struct.pack('<IHHI',offset+len(pixels),0,0,offset)
+        raw+=struct.pack('<IiiHHIIiiII',40,1,1,1,8,0,4,0,0,2,0)+b'\0'*8+pixels
+        path=att.path_at(self.source[0].parent,att.destination(3,A,'2023-11',TOKEN+'.dat'));path.write_bytes(raw)
+        with db(self.b_plain/ops.ALL[1]) as c:c.execute('UPDATE MessageResourceDetail SET size=? WHERE message_id=8',(len(raw),))
+        self.install(self.source,self.b_plain)
+        with patch.object(ops,'ensure_closed'):result=self.plan('palette-bmp')
+        self.assertEqual((result['directions']['A']['added'],result['directions']['A']['image_unsupported']),(4,1))
+
     def plan(self,name='media',voice=True,attachments=True):
         return make_replace_plan({'owner':A,'root':str(self.target[0]),'keys':str(self.target[1])},
             {'owner':B,'root':str(self.source[0]),'keys':str(self.source[1])},self.root/name,
@@ -108,23 +241,88 @@ class WindowsMediaTests(unittest.TestCase):
         with patch.object(att.Images,'candidates',candidates),patch.object(ops,'ensure_closed'):
             self.plan()
             sample.unlink()
-            with self.assertRaisesRegex(ValueError,'没有可核验'):self.plan('no-target-dat-evidence')
+            unavailable=self.plan('no-target-dat-evidence')
+            self.assertEqual(unavailable['directions']['A']['image_target_unavailable'],1)
         candidate=self.root/'media/A-plan/attachment-candidates'/att.destination(3,B,'2023-11',TOKEN+'.dat')
         self.assertNotEqual(candidate.read_bytes(),source.read_bytes())
         self.assertEqual(att.decode_dat(candidate.read_bytes(),target_key,9),PNG)
         value=json.loads((self.root/'media/A-plan/plan.json').read_text(encoding='utf-8'))
         self.assertIn(sample.relative_to(self.target[0].parent).as_posix(),value['assets']['originals'])
 
-    def test_missing_audio_or_attachment_stops_before_real_writes(self):
+    def test_missing_audio_or_attachment_skips_body_without_real_writes(self):
         with db(self.b_plain/MEDIA) as c:c.execute('UPDATE VoiceInfo SET voice_data=NULL')
         self.encrypt_media(self.source,self.b_plain)
-        with patch.object(ops,'ensure_closed'),self.assertRaisesRegex(ValueError,'语音音频缺失'):
-            self.plan('missing-audio')
-        self.assertFalse((self.root/'missing-audio/sync-plan.json').exists())
+        with patch.object(ops,'ensure_closed'):
+            result=self.plan('missing-audio')
+        self.assertEqual((result['directions']['A']['added'],result['directions']['A']['voice_source_unavailable']),(4,1))
         image=att.path_at(self.source[0].parent,att.destination(3,A,'2023-11',TOKEN+'.dat'));image.unlink()
-        with patch.object(ops,'ensure_closed'),self.assertRaisesRegex(ValueError,'未完整下载'):
-            self.plan('missing-image',voice=False)
+        with patch.object(ops,'ensure_closed'):
+            result=self.plan('missing-image',voice=False)
+        self.assertEqual(result['directions']['A']['image_source_unavailable'],1)
         self.assertEqual(ops.state(self.target[0],True),self.a_before)
+
+    def test_missing_target_voice_db_skips_body_and_applies_without_creating_db(self):
+        root,keys=self.target
+        (root/MEDIA).unlink()
+        value=json.loads(keys.read_text(encoding='utf-8'));value['keys'].pop(MEDIA)
+        keys.write_text(json.dumps(value),encoding='utf-8')
+        receipt_path=keys.with_suffix('.capture.json')
+        receipt=json.loads(receipt_path.read_text(encoding='utf-8'))
+        receipt['verified_databases']=list(ops.inspection_files(root,True))
+        receipt['verified_required_databases']=len(receipt['verified_databases'])
+        receipt_path.write_text(json.dumps(receipt),encoding='utf-8')
+        before=ops.state(root,True)
+        with patch.object(ops,'ensure_closed'):
+            result=self.plan('no-target-voice-db')
+            self.assertEqual((result['directions']['A']['added'],result['directions']['A']['voice_target_unavailable']),(4,1))
+            self.assertEqual(sync.apply_sync_plan(self.root/'no-target-voice-db')['state'],'applied')
+            self.assertEqual(sync.undo_sync_plan(self.root/'no-target-voice-db')['state'],'undone')
+        self.assertEqual(ops.state(root,True),before)
+        self.assertFalse((root/MEDIA).exists())
+
+    def test_missing_source_dat_key_skips_body_and_binds_cipher_hash(self):
+        path=att.path_at(self.source[0].parent,att.destination(3,A,'2023-11',TOKEN+'.dat'))
+        raw=att.encode_dat(PNG,att.DAT2+struct.pack('<II',32,8)+b'\0',b'1'*16,7)
+        path.write_bytes(raw)
+        with db(self.b_plain/ops.ALL[1]) as c:c.execute('UPDATE MessageResourceDetail SET size=? WHERE resource_id=8',(len(raw),))
+        self.install(self.source,self.b_plain)
+        with patch.object(ops,'ensure_closed'):
+            result=self.plan('no-source-image-key')
+        self.assertEqual((result['directions']['A']['added'],result['directions']['A']['image_key_unavailable']),(4,1))
+        self.assertEqual(result['original_assets']['B'][path.relative_to(self.source[0].parent).as_posix()],hashlib.sha256(raw).hexdigest())
+
+    def test_absent_voice_dbs_preserve_messages_and_late_new_db_blocks_apply(self):
+        for root,keys in (self.target,self.source):
+            (root/MEDIA).unlink()
+            value=json.loads(keys.read_text(encoding='utf-8'));value['keys'].pop(MEDIA)
+            keys.write_text(json.dumps(value),encoding='utf-8')
+            receipt_path=keys.with_suffix('.capture.json');receipt=json.loads(receipt_path.read_text(encoding='utf-8'))
+            receipt['verified_databases']=list(ops.inspection_files(root,True))
+            receipt['verified_required_databases']=len(receipt['verified_databases'])
+            receipt_path.write_text(json.dumps(receipt),encoding='utf-8')
+        with patch.object(ops,'ensure_closed'):
+            result=self.plan('no-voice-dbs')
+            self.assertEqual((result['directions']['A']['added'],result['directions']['A']['voice_source_unavailable']),(4,1))
+            put(self.target[0],'message/media_8.db',b'synthetic changed inventory')
+            with self.assertRaises(ValueError):sync.apply_sync_plan(self.root/'no-voice-dbs')
+        self.assertFalse((self.root/'no-voice-dbs/A-plan/applied.json').exists())
+
+    def test_missing_second_image_target_evidence_leaves_no_partial_image_candidate(self):
+        header=att.DAT2+struct.pack('<II',32,8)+b'\0';source_key,target_key=b'1'*16,b'2'*16
+        source=att.path_at(self.source[0].parent,att.destination(3,A,'2023-11',TOKEN+'.dat'))
+        source.write_bytes(att.encode_dat(PNG,header,source_key,7))
+        put(self.source[0].parent,att.destination(3,A,'2023-11',TOKEN+'_t.dat'),bytes(b^37 for b in PNG))
+        with db(self.b_plain/ops.ALL[1]) as c:
+            c.execute('UPDATE MessageResourceDetail SET size=? WHERE resource_id=8',(source.stat().st_size,))
+            c.execute("INSERT INTO MessageResourceDetail VALUES(88,8,131074,?,1700000000,0,1,'0',NULL)",(len(PNG),))
+        self.install(self.source,self.b_plain)
+        put(self.target[0].parent,att.destination(3,'wxid_sample','2023-11','c'*32+'.dat'),att.encode_dat(PNG,header,target_key,9))
+        def candidates(context):return iter([(source_key,7)] if context.owner==B else [(target_key,9)])
+        with patch.object(att.Images,'candidates',candidates),patch.object(ops,'ensure_closed'):
+            result=self.plan('partial-image-evidence')
+        report=result['directions']['A']
+        self.assertEqual(report['image_target_unavailable'],1)
+        self.assertFalse(any(TOKEN in name for name in report['assets']['candidates']))
 
     def test_media_key_and_full_receipt_required(self):
         self.source[1].with_suffix('.capture.json').write_text(json.dumps({'state':'verified','owner':B,
@@ -179,6 +377,12 @@ class WindowsMediaTests(unittest.TestCase):
         self.assertEqual(ops.state(self.target[0],True),self.a_before)
 
     def test_source_and_target_multishard_media_follow_native_witnesses(self):
+        self.multishard_media()
+
+    def test_early_shard_unknown_attachment_state_is_in_final_preview(self):
+        self.multishard_media(unknown_state=True)
+
+    def multishard_media(self, unknown_state=False):
         from test_routing import add_witnesses,ensure_fts
         rel='message/message_2.db'
         for plain in (self.a_plain,self.b_plain):shutil.copy2(plain/ops.ALL[0],plain/rel)
@@ -198,6 +402,9 @@ class WindowsMediaTests(unittest.TestCase):
         add_witnesses(self.a_plain,ops.ALL[0],1699999900,1700000000,'old')
         add_witnesses(self.a_plain,rel,1700000001,1700000100,'new')
         ensure_fts(self.b_plain)
+        if unknown_state:
+            with db(self.b_plain/ops.ALL[0]) as c:
+                c.execute('UPDATE '+table_for(A)+' SET status=27,upload_status=8 WHERE server_id=101')
         for account,plain in ((self.source,self.b_plain),(self.target,self.a_plain)):
             root,keys=account
             shutil.copy2(root/ops.ALL[0],root/rel)
@@ -212,6 +419,11 @@ class WindowsMediaTests(unittest.TestCase):
         with patch.object(ops,'ensure_closed'):
             result=self.plan()
             self.assertEqual([item['imported'] for item in result['directions']['A']['target_shard_imports']],[1,3])
+            if unknown_state:
+                report=result['directions']['A']
+                self.assertEqual(report['attachment_state_skipped'],1)
+                self.assertEqual(report['attachment_state_skip_details'],[{'side':'source','kind':3,'status':27,'upload_status':8,'count':1}])
+                self.assertEqual((report['image_added'],report['video_added'],report['file_added']),(0,1,1))
             recovered=self.root/'media/A-plan/recovered-plain'
             with db(recovered/rel) as c:
                 self.assertEqual(c.execute('SELECT server_id,local_id,real_sender_id FROM '+table_for(B)+' ORDER BY server_id').fetchall(),[(102,1,68),(103,2,15),(104,3,68)])
@@ -229,6 +441,62 @@ class WindowsMediaTests(unittest.TestCase):
         with patch.object(ops,'ensure_closed'),self.assertRaisesRegex(ValueError,'collision'):
             self.plan('conflict',voice=False)
         self.assertEqual(ops.state(self.target[0],True),self.a_before)
+
+    def test_multiple_media_databases_apply_undo_and_failure_rollback(self):
+        extra='message/media_7.db'
+        for plain in (self.a_plain,self.b_plain):shutil.copy2(plain/MEDIA,plain/extra)
+        with db(self.b_plain/extra) as c:
+            c.execute('UPDATE Name2Id SET rowid=580 WHERE rowid=58')
+            c.execute('DELETE FROM VoiceInfo')
+            c.execute("INSERT INTO VoiceInfo VALUES(580,1700000030,5,105,?,'0')",(AUDIO1,))
+        with db(self.b_plain/ops.ALL[0]) as c:
+            table=table_for(A);row=list(c.execute('SELECT * FROM '+table+' WHERE server_id=104').fetchone())
+            row[0],row[1],row[5]=5,105,1700000030;row[3]+=27000
+            c.execute('INSERT INTO '+table+' VALUES('+','.join('?' for _ in row)+')',row)
+        with db(self.a_plain/extra) as c:c.execute('DELETE FROM VoiceInfo')
+        # Target associations differ from source media filenames and local IDs.
+        with db(self.a_plain/extra) as c:
+            c.execute("INSERT INTO VoiceInfo VALUES(58,1700000003,700,104,?,'0')",(AUDIO1,))
+        with db(self.a_plain/MEDIA) as c:
+            c.execute("INSERT INTO VoiceInfo VALUES(58,1700000030,800,105,?,'0')",(AUDIO1,))
+        for account,plain in ((self.source,self.b_plain),(self.target,self.a_plain)):
+            root,keys=account;key=os.urandom(32).hex()
+            value=json.loads(keys.read_text(encoding='utf-8'));value['keys'][extra]={'enc_key':key}
+            keys.write_text(json.dumps(value),encoding='utf-8')
+            with DB(root/extra,key,fixture_write=True) as c:c.query('CREATE TABLE template(id INTEGER PRIMARY KEY)')
+            self.install(account,plain);self.encrypt_media(account,plain)
+            candidate=Path(str(root/extra)+'.test');encrypt_database(plain/extra,candidate,root/extra,keys);os.replace(candidate,root/extra)
+            receipt=keys.with_suffix('.capture.json');value=json.loads(receipt.read_text(encoding='utf-8'))
+            value.update(verified_required_databases=6,verified_databases=list(ops.inspection_files(root,True)))
+            receipt.write_text(json.dumps(value),encoding='utf-8')
+        before=ops.state(self.target[0],True);source_before=ops.state(self.source[0],True)
+        with patch.object(ops,'ensure_closed'):
+            self.plan()
+            recovered=self.root/'media/A-plan/recovered-plain'
+            for rel,sid in ((extra,104),(MEDIA,105)):
+                with db(recovered/rel) as c:self.assertEqual(c.execute('SELECT voice_data FROM VoiceInfo WHERE svr_id=?',(sid,)).fetchone(),(AUDIO1,))
+            sync.apply_sync_plan(self.root/'media');sync.undo_sync_plan(self.root/'media')
+            self.assertEqual(ops.state(self.target[0],True),before)
+            self.plan('media-failure');replace=os.replace
+            def fail(source,dest):
+                if str(source).endswith('media_7.db.chat-rescue-stage'):raise OSError('synthetic extra media failure')
+                return replace(source,dest)
+            with patch.object(os,'replace',side_effect=fail),self.assertRaises(RuntimeError):
+                sync.apply_sync_plan(self.root/'media-failure')
+        self.assertEqual(ops.state(self.target[0],True),before)
+        self.assertEqual(ops.state(self.source[0],True),source_before)
+        result=json.loads((self.root/'media-failure/A-plan/rollback.json').read_text(encoding='utf-8'))
+        self.assertEqual(result['state'],'rolled_back')
+        # A source row without an original A association must not be time-routed.
+        with db(self.a_plain/extra) as c:c.execute('DELETE FROM VoiceInfo WHERE svr_id=104')
+        candidate=Path(str(self.target[0]/extra)+'.test')
+        encrypt_database(self.a_plain/extra,candidate,self.target[0]/extra,self.target[1]);os.replace(candidate,self.target[0]/extra)
+        before_missing=ops.state(self.target[0],True)
+        with patch.object(ops,'ensure_closed'):
+            missing_result=self.plan('missing-target-association')
+        self.assertEqual(missing_result['directions']['A']['voice_target_unavailable'],1)
+        self.assertEqual(ops.state(self.target[0],True),before_missing)
+        self.assertTrue((self.root/'missing-target-association/sync-plan.json').exists())
 
     def test_voice_and_attachment_switches_work_independently(self):
         with patch.object(ops,'ensure_closed'):

@@ -34,7 +34,7 @@ def files_for(include_voice=False):
 
 def inspection_files(root, include_voice=False):
     """Read all existing shards on both platforms; media adds its own database."""
-    return (*database_rels(root), *((MEDIA,) if include_voice else ()))
+    return (*database_rels(root), *(single_media(root) if include_voice else ()))
 
 
 
@@ -63,7 +63,7 @@ def plan_sets(plan):
         _single_shard(root)
     read_set = inspection_files(root, voice)
     write_set = tuple(plan.get('write_set', ())) if version in (2,3,5) else mutable_rels(root)
-    allowed_writes = (*mutable_rels(root), MEDIA) if voice else mutable_rels(root)
+    allowed_writes = (*mutable_rels(root), *single_media(root)) if voice else mutable_rels(root)
     if ((not write_set and not (attachments and plan['assets']['candidates']))
             or len(set(write_set)) != len(write_set)
             or not set(write_set) <= set(allowed_writes)
@@ -195,10 +195,10 @@ def make_plan(source, root, keys, owner, output, *, include_voice=False, include
     export_root(root, keys, exported, include_voice=include_voice, include_attachments=include_attachments)
     report = json.loads((exported / 'export-report.json').read_text(encoding='utf-8'))
     result = prepare_plain_restore(source, exported, owner, output / 'recovered-plain', include_voice=include_voice, include_attachments=include_attachments)
-    voice = (exported / MEDIA).exists() and include_voice
-    writes = (*mutable_rels(root), MEDIA) if voice else mutable_rels(root)
+    voice = include_voice
+    writes = (*mutable_rels(root), *single_media(root)) if voice else mutable_rels(root)
     if (voice or include_attachments) and not result['added']:
-        writes = tuple(r for r in result['changed_databases'] if r in (MEDIA, RELS[1]))
+        writes = tuple(r for r in result['changed_databases'] if r in (*(single_media(root) if voice else ()), RELS[1]))
         if not writes and not (include_attachments and result['assets']['candidates']):
             raise ValueError('没有需要应用的语音或消息变化')
     for rel in writes:
@@ -225,12 +225,16 @@ def make_plan(source, root, keys, owner, output, *, include_voice=False, include
 
 
 def apply_plan(directory):
-    supported_host(); ensure_closed()
+    supported_host()
     directory = Path(directory).resolve(strict=True)
+    from .portable_task import require_current_plan
+    require_current_plan(directory)
+    ensure_closed()
     with exclusive_lock(directory / '.lock'):
         plan = json.loads((directory / 'plan.json').read_text(encoding='utf-8'))
         read_set, writes = plan_sets(plan)
-        include_voice = MEDIA in read_set
+        from .voice import is_media_rel
+        include_voice = windows_options(plan)['include_voice'] if plan['version']==5 else any(is_media_rel(name) for name in read_set)
         if (directory / 'apply-started.json').exists():
             raise ValueError('计划已尝试应用；请检查回执并重新生成计划')
         root = Path(plan['target_root']).resolve(strict=True)

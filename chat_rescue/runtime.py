@@ -62,14 +62,61 @@ def exclusive_lock(path):
 
 @lru_cache(maxsize=1)
 def current_sid():
-    result = subprocess.run(['whoami.exe', '/user', '/fo', 'csv', '/nh'],
-                            check=True, capture_output=True, text=True,
-                            creationflags=subprocess.CREATE_NO_WINDOW)
-    rows = list(csv.reader(io.StringIO(result.stdout)))
-    sid = rows[0][1] if len(rows) == 1 and len(rows[0]) == 2 else ''
-    if not sid.startswith('S-1-') or not all(p.isdigit() for p in sid[2:].split('-')):
-        raise RuntimeError('无法核对当前 Windows 用户 SID')
-    return sid
+    # Read our own process token, without parsing localized command output.
+    # TOKEN_QUERY does not enable privileges or inspect another process.
+    from ctypes import wintypes as W
+    adv = C.WinDLL('advapi32', use_last_error=True)
+    kernel = C.WinDLL('kernel32', use_last_error=True)
+    kernel.GetCurrentProcess.argtypes = []
+    kernel.GetCurrentProcess.restype = W.HANDLE
+    kernel.CloseHandle.argtypes = [W.HANDLE]
+    kernel.CloseHandle.restype = W.BOOL
+    kernel.LocalFree.argtypes = [C.c_void_p]
+    kernel.LocalFree.restype = C.c_void_p
+    adv.OpenProcessToken.argtypes = [W.HANDLE, W.DWORD, C.POINTER(W.HANDLE)]
+    adv.OpenProcessToken.restype = W.BOOL
+    adv.GetTokenInformation.argtypes = [W.HANDLE, W.DWORD, C.c_void_p,
+                                       W.DWORD, C.POINTER(W.DWORD)]
+    adv.GetTokenInformation.restype = W.BOOL
+    adv.ConvertSidToStringSidW.argtypes = [C.c_void_p, C.POINTER(W.LPWSTR)]
+    adv.ConvertSidToStringSidW.restype = W.BOOL
+
+    class TokenUser(C.Structure):
+        _fields_ = [('sid', C.c_void_p), ('attributes', W.DWORD)]
+
+    def failed(api):
+        return RuntimeError(f'无法核对当前 Windows 用户 SID（{api}，Windows 错误码 {C.get_last_error()}）')
+
+    token, length = W.HANDLE(), W.DWORD()
+    if not adv.OpenProcessToken(kernel.GetCurrentProcess(), 8, C.byref(token)):
+        raise failed('OpenProcessToken')
+    try:
+        queried = adv.GetTokenInformation(token, 1, None, 0, C.byref(length))
+        if queried or C.get_last_error() != 122:  # ERROR_INSUFFICIENT_BUFFER
+            raise failed('GetTokenInformation/size')
+        if not C.sizeof(TokenUser) <= length.value <= 65536:
+            raise RuntimeError('无法核对当前 Windows 用户 SID（TokenUser 长度无效）')
+        data = C.create_string_buffer(length.value)
+        if not adv.GetTokenInformation(token, 1, data, len(data), C.byref(length)):
+            raise failed('GetTokenInformation/read')
+        if not C.sizeof(TokenUser) <= length.value <= len(data):
+            raise RuntimeError('无法核对当前 Windows 用户 SID（TokenUser 返回长度无效）')
+        user = TokenUser.from_buffer(data)
+        if not user.sid:
+            raise RuntimeError('无法核对当前 Windows 用户 SID（TokenUser 缺少 SID）')
+        sid_text = W.LPWSTR()
+        if not adv.ConvertSidToStringSidW(user.sid, C.byref(sid_text)):
+            raise failed('ConvertSidToStringSidW')
+        try:
+            sid = sid_text.value or ''
+            if not sid.startswith('S-1-') or not sid.isascii() or not all(
+                    part.isdigit() for part in sid[2:].split('-')):
+                raise RuntimeError('无法核对当前 Windows 用户 SID（系统 SID 格式无效）')
+            return sid
+        finally:
+            kernel.LocalFree(C.cast(sid_text, C.c_void_p))
+    finally:
+        kernel.CloseHandle(token)
 
 
 def make_private(path):

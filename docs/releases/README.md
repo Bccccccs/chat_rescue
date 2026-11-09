@@ -1,12 +1,13 @@
 # 发布版本对照
 
-截至 2026-11-05，Mac 当前安装包为 **0.5.0**，Windows 当前安装包为 **0.5.6**。所有已发布下载均标记为 GitHub Pre-release（实验预发布）；目前没有正式稳定版。
+截至 2026-11-09，Mac 当前安装包为 **0.5.0**，Windows 当前安装包为 **0.6.0**。所有已发布下载均标记为 GitHub Pre-release（实验预发布）；目前没有正式稳定版。
 
 ## 各个版本是什么
 
 | 工具版本 | 平台 | 发布状态 | 内容与用途 |
 | --- | --- | --- | --- |
-| [0.5.6](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.6) | Windows x64 | 当前 Windows 下载版 | 修复已知辅助表布局误报；保留分片/身份保护，加入默认关闭的原语音与图片、视频、文件本体实验；真实打开未验收。 |
+| [0.6.0](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.6.0) | Windows x64 | 当前 Windows 下载版 | 三步流程、历史昵称与目录选择、账号重新核验、同一操作者任务接续及媒体分类跳过；不附微信，实际媒体与换机仍需验收。 |
+| [0.5.6](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.6) | Windows x64 | 历史实验版 | 修复已知辅助表布局误报；保留分片/身份保护，加入默认关闭的原语音与图片、视频、文件本体实验；真实打开未验收。 |
 | [0.5.5](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.5) | Windows x64 | 历史实验版 | B→A 替换；核对必需结构、按原生证据分片分配，列出每片数量与日期；未知或歧义停止，客户端显示仍待验收。 |
 | [0.5.4](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.4) | Windows x64 | 历史实验版 | B → A 单会话替换；预览 A 将移除和从 B 导入的数量，B 只读。4.2.x.x 版本准入与多分片处理保留。提供安装 EXE 和便携 ZIP；不搬运附件本体。此 Release 没有 Mac 安装包。 |
 | [0.5.3](https://github.com/Bccccccs/chat_rescue/releases/tag/v0.5.3) | Windows x64 | 历史实验版 | B→A 单会话替换；旧字段 2 判断未适配当前历史记录。 |
@@ -25,8 +26,8 @@
 | 使用环境 | 文件 |
 | --- | --- |
 | Mac，Apple 芯片 M 系列 | [Chat-Rescue-0.5.0-macOS-arm64.zip](https://github.com/Bccccccs/chat_rescue/releases/download/v0.5.0/Chat-Rescue-0.5.0-macOS-arm64.zip) |
-| Windows x64，安装使用 | [Chat-Rescue-0.5.6-Windows-x64-Setup.exe](https://github.com/Bccccccs/chat_rescue/releases/download/v0.5.6/Chat-Rescue-0.5.6-Windows-x64-Setup.exe) |
-| Windows x64，解压使用 | [Chat-Rescue-0.5.6-Windows-x64-Portable.zip](https://github.com/Bccccccs/chat_rescue/releases/download/v0.5.6/Chat-Rescue-0.5.6-Windows-x64-Portable.zip) |
+| Windows x64，安装使用 | [Chat-Rescue-0.6.0-Windows-x64-Setup.exe](https://github.com/Bccccccs/chat_rescue/releases/download/v0.6.0/Chat-Rescue-0.6.0-Windows-x64-Setup.exe) |
+| Windows x64，解压使用 | [Chat-Rescue-0.6.0-Windows-x64-Portable.zip](https://github.com/Bccccccs/chat_rescue/releases/download/v0.6.0/Chat-Rescue-0.6.0-Windows-x64-Portable.zip) |
 
 `SHA256SUMS.txt` 是所在 Release 安装包的校验文件，不能混用其他版本的校验值。`SOURCE_COMMIT.txt`（Mac 0.5.0）记录源码提交；GitHub 自动生成的 `Source code` 是源码快照，不是可直接打开的桌面安装包。Windows 安装包与便携包是同一版本的两种分发形式。
 
@@ -34,7 +35,7 @@
 
 - 0.5.0 / 0.5.4 是 Chat Rescue 的工具版本；4.1.13 / 4.2.0.12 是微信版本。
 - Mac 0.5.0 适配微信 4.1.13；Windows 实验取钥面向 4.2.x.x x64，现有实机依据为 4.2.0.12，其他完整版本不能据此视为已验证。
-- main 当前源码版本为 0.5.6，合并了 Mac 媒体实验代码与 Windows 更新。源码版本不等于两个平台都已发布同号安装包；Mac 官方下载仍是 0.5.0。
+- main 当前源码版本为 0.6.0，合并了 Mac 媒体实验代码与 Windows 更新。源码版本不等于两个平台都已发布同号安装包；Mac 官方下载仍是 0.5.0。
 - 0.5.4 的 Windows 非文本明确结构转换有合成验证，不等于语音可播放或图片、视频、文件附件可打开；Windows 不处理 Mac 媒体 v2/v3 bundle。
 - Mac 媒体查看/播放/打开、Windows 真实 GUI 恢复和各类型显示、手机迁移仍须独立验收。所有版本均不自动同步到微信服务器或手机。
 

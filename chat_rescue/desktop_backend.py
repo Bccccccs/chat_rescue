@@ -272,9 +272,10 @@ def inspect_account(account, *, include_voice=False, include_attachments=False):
         except (ValueError, KeyError, RuntimeError):
             return {'requires_message_keys': True}
     if include_voice:
-        from .voice import MEDIA
+        from .voice import single_media
         try:
-            load_key(account['keys'], root / MEDIA)
+            for rel in single_media(root):
+                load_key(account['keys'], root / rel)
         except (ValueError, KeyError, RuntimeError):
             return {'requires_voice_keys': True}
     directory = new_job()/'plain'

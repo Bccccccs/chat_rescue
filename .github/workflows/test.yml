@@ -43,7 +43,7 @@ jobs:
         run: python -c "from chat_rescue.vendor.sqlcipher_probe import library; library()"
       - name: 执行 Windows 合成恢复与回撤测试
         run: python -W error::ResourceWarning -m unittest discover -s tests -v
-      - name: 编译 Windows 五步桌面向导
+      - name: 编译 Windows 三步桌面向导
         shell: pwsh
         run: .\desktop\windows\build.ps1 -Python (Get-Command python).Source -SqlCipher $env:SQLCIPHER_LIBRARY
       - name: 准备固定安装器编译工具

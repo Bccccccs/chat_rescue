@@ -5,6 +5,8 @@ from pathlib import Path
 import tempfile
 import unittest
 import zipfile
+import subprocess
+import sys
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('windows_package', Path(__file__).resolve().parents[1] / 'desktop/windows/package.py')
@@ -13,6 +15,17 @@ spec.loader.exec_module(package)
 
 
 class WindowsPackageTests(unittest.TestCase):
+    def test_script_entry_can_import_pinned_client_without_installed_project(self):
+        entry=Path(package.__file__).resolve()
+        root=entry.parents[2]
+        code=('import sys,runpy; from pathlib import Path; '
+              'sys.path=[p for p in sys.path if Path(p).resolve()!=Path('+repr(str(root))+')]; '
+              'runpy.run_path('+repr(str(entry))+',run_name="package_probe"); '
+              'import chat_rescue.windows_client')
+        with tempfile.TemporaryDirectory() as tmp:
+            result=subprocess.run([sys.executable,'-X','utf8','-c',code],cwd=tmp,capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr.decode('utf-8','replace'))
+
     def test_verified_timezone_payload_and_both_licenses_are_bundled(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);wheel=root/'synthetic.whl'
